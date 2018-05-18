@@ -1,0 +1,3 @@
+[submodule "vendor/parser"]
+	path = vendor/parser
+	url = git@github.com:whitequark/parser.git

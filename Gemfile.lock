@@ -1,0 +1,42 @@
+PATH
+  remote: .
+  specs:
+    ripper_lexer (0.1.0)
+      ast (~> 2.4.0)
+      parser (= 2.5.1.0)
+
+GEM
+  remote: https://rubygems.org/
+  specs:
+    ast (2.4.0)
+    cliver (0.3.2)
+    docile (1.1.5)
+    json (2.1.0)
+    minitest (5.11.3)
+    parser (2.5.1.0)
+      ast (~> 2.4.0)
+    racc (1.4.14)
+    rake (10.5.0)
+    rake-compiler (0.9.9)
+      rake
+    simplecov (0.15.1)
+      docile (~> 1.1.0)
+      json (>= 1.8, < 3)
+      simplecov-html (~> 0.10.0)
+    simplecov-html (0.10.2)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  bundler (~> 1.16)
+  cliver (~> 0.3.2)
+  minitest (~> 5.10)
+  racc (= 1.4.14)
+  rake (~> 10.0)
+  rake-compiler (~> 0.9)
+  ripper_lexer!
+  simplecov (~> 0.15.1)
+
+BUNDLED WITH
+   1.16.2
