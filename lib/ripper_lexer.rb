@@ -224,6 +224,16 @@ module RipperLexer
       end
     end
 
+    def process_unary(sign, value)
+      value = process(value)
+      case sign
+      when :-@
+        value.updated(nil, [-value.children[0]])
+      else
+        raise "Unsupported unary sign #{sign}"
+      end
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
