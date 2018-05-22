@@ -253,6 +253,32 @@ module RipperLexer
       end
     end
 
+    def process_string_literal(string_content)
+      _, *parts = string_content
+      parts = parts.map { |part| process(part) }
+      interpolated = parts.any? { |part| part.type != :str }
+
+      if interpolated
+        s(:dstr, *parts)
+      elsif parts.length == 1
+        parts.first
+      else
+        s(:str, *parts)
+      end
+    end
+
+    define_method('process_@tstring_content') do |value, _location|
+      s(:str, value)
+    end
+
+    def process_string_embexpr((expr))
+      expr = process(expr)
+      if expr.type != :begin
+        expr = s(:begin, expr)
+      end
+      expr
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
