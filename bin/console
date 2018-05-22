@@ -10,5 +10,36 @@ require "ripper_lexer"
 # require "pry"
 # Pry.start
 
-require "irb"
-IRB.start(__FILE__)
+source = <<-RUBY
+  class A::B::C < Parent
+    C = 1
+  end
+RUBY
+
+source = <<-RUBY
+  def m(a, (b, c, *), e = 1, *f, g, (h, i), j:, k: 1, **, &m)
+    123
+  end
+RUBY
+
+ast = Ripper.sexp(source)
+puts "\n\nRipper:"
+pp ast
+
+require 'parser/ruby25'
+parser = Parser::Ruby25.new
+buffer = Parser::Source::Buffer.new('(eval)')
+buffer.source = source
+expected = parser.parse(buffer)
+
+
+
+rewritten = RipperLexer::Rewriter.new.process(ast)
+
+puts "\n\nParser:"
+pp expected
+
+puts "\n\nRipper + rewriter:"
+pp rewritten
+
+p rewritten == expected
