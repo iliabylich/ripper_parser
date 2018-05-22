@@ -210,6 +210,9 @@ module RipperLexer
         s(:true)
       when 'false'
         s(:false)
+      when '__LINE__'
+        line, col = location
+        s(:int, line)
       else
         raise "Unsupport keyword #{keyword}"
       end
