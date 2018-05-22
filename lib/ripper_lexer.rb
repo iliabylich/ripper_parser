@@ -117,6 +117,10 @@ module RipperLexer
       s(:float, Float(value))
     end
 
+    define_method('process_@rational') do |value, _location|
+      s(:rational, value.to_r)
+    end
+
     def process_def(mid, args, bodystmt)
       mid = process(mid)
       args = process(args)
