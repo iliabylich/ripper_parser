@@ -113,6 +113,10 @@ module RipperLexer
       s(:int, Integer(value))
     end
 
+    define_method('process_@float') do |value, _location|
+      s(:float, Float(value))
+    end
+
     def process_def(mid, args, bodystmt)
       mid = process(mid)
       args = process(args)
