@@ -110,15 +110,23 @@ module RipperLexer
     end
 
     define_method('process_@int') do |value, _location|
-      s(:int, Integer(value))
+      s(:int, value.to_i)
     end
 
     define_method('process_@float') do |value, _location|
-      s(:float, Float(value))
+      s(:float, value.to_f)
     end
 
     define_method('process_@rational') do |value, _location|
       s(:rational, value.to_r)
+    end
+
+    define_method('process_@imaginary') do |value, _location|
+      if value.end_with?('ri')
+        s(:complex, eval(value)) # TODO: rare case, but probably deserves some optimization
+      else
+        s(:complex, value.to_c)
+      end
     end
 
     def process_def(mid, args, bodystmt)
