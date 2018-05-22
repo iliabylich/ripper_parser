@@ -30,8 +30,6 @@ module Parser
       rewriter = RipperLexer::Rewriter.new(@builder)
       rewriter.process(ripper_ast)
     end
-
-    # attr_accessor :force_utf32
   end
 end
 
@@ -86,7 +84,7 @@ module RipperLexer
     end
 
     def process_bodystmt(stmts, _, _, _)
-      stmts = stmts.map { |stmt| process(stmt) }
+      stmts = stmts.map { |stmt| process(stmt) }.compact
       if stmts.length == 1
         stmts[0]
       else
@@ -192,20 +190,37 @@ module RipperLexer
       s(:blockarg, process(name))
     end
 
-    def process_paren(params)
-      if params[0] != :params
-        raise 'expected :params'
+    def process_paren(inner)
+      type, *children = *inner
+      case type
+      when :params
+        process(inner)
+      when [:void_stmt]
+        s(:begin)
+      else
+        raise "Unsupported paren child #{type}"
       end
-
-      process(params)
     end
 
     define_method('process_@kw') do |keyword, location|
       case keyword
       when 'nil'
         s(:nil)
+      when 'true'
+        s(:true)
+      when 'false'
+        s(:false)
       else
         raise "Unsupport keyword #{keyword}"
+      end
+    end
+
+    def process_begin(bodystmt)
+      bodystmt = process(bodystmt)
+      if bodystmt.nil?
+        s(:kwbegin)
+      else
+        bodystmt.updated(:kwbegin)
       end
     end
 

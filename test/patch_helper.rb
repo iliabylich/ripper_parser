@@ -9,6 +9,12 @@ module ParseHelper
   def parse_source_map_descriptions(*)
     # We don't care about source maps
   end
+
+  def assert_parses(ast, code, source_maps='', versions=ALL_VERSIONS)
+    with_versions(versions) do |version, parser|
+      try_parsing(ast, code, parser, source_maps, version)
+    end
+  end
 end
 
 module Parser
