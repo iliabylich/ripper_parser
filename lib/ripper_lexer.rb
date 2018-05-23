@@ -72,7 +72,14 @@ module RipperLexer
     end
 
     def process_var_ref(ref)
-      process(ref)
+      case ref[0]
+      when :@ident
+        s(:lvar, process(ref))
+      when :@kw
+        process(ref)
+      else
+        raise "Unsupported var_ref #{ref[0]}"
+      end
     end
 
     define_method('process_@const') do |const_name, _location|
@@ -97,16 +104,19 @@ module RipperLexer
       ref = process(ref)
       value = process(value)
 
+
       case ref.type
       when :const
         ref.updated(:casgn, [*ref, value])
+      when :lvar
+        ref.updated(:lvasgn, [*ref, value])
       else
         raise "Unsupport assign type #{ref.type}"
       end
     end
 
     def process_var_field(field)
-      process(field)
+      s(:lvar, process(field))
     end
 
     define_method('process_@int') do |value, _location|

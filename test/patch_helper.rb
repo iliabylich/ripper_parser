@@ -27,3 +27,14 @@ module Parser
   remove_const(:Ruby25)
   Ruby25 = Ruby251WithRipperLexer
 end
+
+module ParserExt
+  def parse(source_buffer)
+    locals = @static_env.instance_eval { @variables.to_a }
+    locals_code = locals.map { |l| "#{l} = nil; " }.join
+    source_buffer.instance_eval { @source = locals_code + @source }
+    super.children[locals.count]
+  end
+end
+
+Parser::Ruby25.prepend(ParserExt)
