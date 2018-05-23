@@ -285,7 +285,7 @@ module RipperLexer
       elsif parts.length == 1
         parts.first
       else
-        s(:str, *parts)
+        s(:dstr, *parts)
       end
     end
 
@@ -337,6 +337,42 @@ module RipperLexer
 
     define_method('process_@CHAR') do |value, _location|
       s(:str, value[1])
+    end
+
+    def process_method_add_arg(call, args)
+      send = process(call)
+      args = process(args)
+      send.updated(nil, [*send, *args])
+    end
+
+    def process_call(recv, op, mid)
+      s(:send, process(recv), process(mid))
+    end
+
+    def process_arg_paren(inner)
+      process(inner)
+    end
+
+    def process_args_add_block(args, _)
+      args.map { |a| process(a) }
+    end
+
+    def process_command(mid, args)
+      mid = process(mid)
+      args = process(args)
+      s(:send, nil, mid, *args)
+    end
+
+    def process_command_call(recv, op, mid, args)
+      recv = process(recv)
+      mid = process(mid)
+      args = process(args)
+
+      s(:send, recv, mid, *args)
+    end
+
+    def process_vcall(mid)
+      s(:send, nil, process(mid))
     end
 
     def s(type, *children)

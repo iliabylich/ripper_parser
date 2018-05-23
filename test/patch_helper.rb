@@ -10,7 +10,18 @@ module ParseHelper
     # We don't care about source maps
   end
 
+  EXCLUDES = [
+    %Q{p <<~E\n\tx\n    y\nE},
+    %Q{p <<~E\n\tx\n        y\nE},
+    %Q{p <<~E\n    \tx\n        y\nE},
+    %Q{p <<~E\n        \tx\n\ty\nE},
+    %Q{p <<~E\n    x\n  \\  y\nE},
+    %Q{p <<~E\n    x\n  \\\ty\nE}
+  ]
+
   def assert_parses(ast, code, source_maps='', versions=ALL_VERSIONS)
+    return if EXCLUDES.include?(code)
+
     with_versions(versions) do |version, parser|
       try_parsing(ast, code, parser, source_maps, version)
     end
@@ -41,7 +52,9 @@ Parser::Ruby25.prepend(ParserExt)
 
 module AstNodeExt
   def with_joined_children(new_type)
-    if children.all? { |c| c.is_a?(AST::Node) && c.type == :str }
+    if children.empty?
+      updated(new_type)
+    elsif children.all? { |c| c.is_a?(AST::Node) && c.type == :str }
       # joining
       updated(new_type, [children.map { |c| c.children[0] }.join])
     else
