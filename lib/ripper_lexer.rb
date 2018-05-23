@@ -375,6 +375,28 @@ module RipperLexer
       s(:send, nil, process(mid))
     end
 
+    def process_symbol_literal(inner)
+      s(:sym, process(inner))
+    end
+
+    def process_symbol(symbol)
+      process(symbol)
+    end
+
+    def process_dyna_symbol(parts)
+      parts = parts.map { |part| process(part) }
+      interpolated = parts.any? { |part| part.type != :str }
+
+      if interpolated
+        s(:dsym, *parts)
+      elsif parts.length == 1
+        part = parts.first
+        part.updated(:sym, [part.children[0].to_sym])
+      else
+        s(:dsym, *parts)
+      end
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
