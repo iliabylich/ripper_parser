@@ -77,6 +77,12 @@ module RipperLexer
         s(:lvar, process(ref))
       when :@kw
         process(ref)
+      when :@ivar
+        process(ref)
+      when :@cvar
+        process(ref)
+      when :@gvar
+        process(ref)
       else
         raise "Unsupported var_ref #{ref[0]}"
       end
@@ -287,6 +293,22 @@ module RipperLexer
         expr = s(:begin, expr)
       end
       expr
+    end
+
+    def process_string_dvar(value)
+      process(value)
+    end
+
+    define_method('process_@ivar') do |value, _location|
+      s(:ivar, value.to_sym)
+    end
+
+    define_method('process_@cvar') do |value, _location|
+      s(:cvar, value.to_sym)
+    end
+
+    define_method('process_@gvar') do |value, _location|
+      s(:gvar, value.to_sym)
     end
 
     def s(type, *children)
