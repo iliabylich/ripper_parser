@@ -311,6 +311,11 @@ module RipperLexer
       s(:gvar, value.to_sym)
     end
 
+    def process_string_concat(*strings)
+      strings = strings.map { |s| process(s) }
+      s(:dstr, *strings)
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
