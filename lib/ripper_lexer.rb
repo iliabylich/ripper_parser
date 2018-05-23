@@ -27,7 +27,10 @@ module Parser
 
     def parse(source_buffer)
       ripper_ast = Ripper.sexp(source_buffer.source)
-      rewriter = RipperLexer::Rewriter.new(@builder)
+      rewriter = RipperLexer::Rewriter.new(
+        builder: @builder,
+        file: source_buffer.name
+      )
       rewriter.process(ripper_ast)
     end
   end
@@ -35,8 +38,9 @@ end
 
 module RipperLexer
   class Rewriter
-    def initialize(builder)
+    def initialize(builder:, file:)
       @builder = builder
+      @file = file
     end
 
     def process(ast)
@@ -245,6 +249,8 @@ module RipperLexer
       when '__LINE__'
         line, col = location
         s(:int, line)
+      when '__FILE__'
+        s(:str, @file)
       else
         raise "Unsupport keyword #{keyword}"
       end
