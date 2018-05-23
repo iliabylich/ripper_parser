@@ -38,3 +38,37 @@ module ParserExt
 end
 
 Parser::Ruby25.prepend(ParserExt)
+
+module AstNodeExt
+  def with_joined_children(new_type)
+    if children.all? { |c| c.is_a?(AST::Node) && c.type == :str }
+      # joining
+      updated(new_type, [children.map { |c| c.children[0] }.join])
+    else
+      self
+    end
+  end
+
+  def ==(other)
+    a = self
+    b = other
+
+    a = a.with_joined_children(:str) if a.type == :dstr
+    a = a.with_joined_children(:xstr) if a.type == :xstr
+
+    b = b.with_joined_children(:str) if b.type == :dstr
+    b = b.with_joined_children(:xstr) if b.type == :xstr
+
+    if a.equal?(b)
+      true
+    elsif b.respond_to? :to_ast
+      b = b.to_ast
+      b.type == a.type &&
+        b.children == a.children
+    else
+      false
+    end
+  end
+end
+
+AST::Node.prepend(AstNodeExt)

@@ -289,6 +289,19 @@ module RipperLexer
       end
     end
 
+    def process_xstring_literal(parts)
+      parts = parts.map { |part| process(part) }
+      interpolated = parts.any? { |part| part.type != :str }
+
+      if interpolated
+        s(:xstr, *parts)
+      elsif parts.length == 1
+        parts.first.updated(:xstr)
+      else
+        s(:xstr, *parts)
+      end
+    end
+
     define_method('process_@tstring_content') do |value, _location|
       s(:str, value)
     end
@@ -320,6 +333,10 @@ module RipperLexer
     def process_string_concat(*strings)
       strings = strings.map { |s| process(s) }
       s(:dstr, *strings)
+    end
+
+    define_method('process_@CHAR') do |value, _location|
+      s(:str, value[1])
     end
 
     def s(type, *children)
