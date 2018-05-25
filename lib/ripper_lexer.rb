@@ -75,6 +75,11 @@ module RipperLexer
       process(ref)
     end
 
+    def process_top_const_ref(ref)
+      _, const_name = *process(ref)
+      s(:const, s(:cbase), const_name)
+    end
+
     def process_var_ref(ref)
       case ref[0]
       when :@ident
@@ -86,6 +91,8 @@ module RipperLexer
       when :@cvar
         process(ref)
       when :@gvar
+        process(ref)
+      when :@const
         process(ref)
       else
         raise "Unsupported var_ref #{ref[0]}"
@@ -253,6 +260,12 @@ module RipperLexer
         s(:str, @file)
       when 'self'
         s(:self)
+      when '__ENCODING__'
+        if @builder.class.emit_encoding
+          s(:__ENCODING__)
+        else
+          s(:const, s(:const, nil, :Encoding), :UTF_8)
+        end
       else
         raise "Unsupport keyword #{keyword}"
       end
