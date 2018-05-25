@@ -109,7 +109,10 @@ module RipperLexer
 
     def process_bodystmt(stmts, _, _, _)
       stmts = stmts.map { |stmt| process(stmt) }.compact
-      if stmts.length == 1
+      case stmts.length
+      when 0
+        nil
+      when 1
         stmts[0]
       else
         s(:begin, *stmts)
@@ -652,6 +655,14 @@ module RipperLexer
 
     define_method('process_@op') do |value, _location|
       value
+    end
+
+    def process_module(const_name, bodystmt)
+      s(:module, process(const_name), process(bodystmt))
+    end
+
+    def process_sclass(sclass_of, bodystmt)
+      s(:sclass, process(sclass_of), process(bodystmt))
     end
 
     def s(type, *children)

@@ -88,6 +88,8 @@ module AstNodeExt
   end
 
   def ==(other)
+    return false if other.nil?
+
     a = self
     b = other
 
