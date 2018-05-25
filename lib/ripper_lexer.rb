@@ -138,6 +138,13 @@ module RipperLexer
         ref.updated(:cvasgn)
       when :mlhs
         s(:mlhs, *ref.children.map { |child| reader_to_writer(child) })
+      when :restarg
+        child, _ = *ref
+        if child
+          s(:splat, reader_to_writer(child))
+        else
+          s(:splat)
+        end
       else
         raise "Unsupport assign type #{ref.type}"
       end
@@ -546,7 +553,9 @@ module RipperLexer
       mlhs = s(:mlhs, *process_mlhs(*mlhs))
       mlhs = reader_to_writer(mlhs)
 
-      s(:masgn, mlhs, process(mrhs))
+      mrhs = process(mrhs)
+
+      s(:masgn, mlhs, mrhs)
     end
 
     def process_mlhs(*mlhs)
@@ -554,9 +563,12 @@ module RipperLexer
       mlhs = s(:mlhs, *mlhs)
     end
 
-    def process_mrhs_new_from_args(first, last)
-      items = (first + [last]).map { |p| process(p) }
-      s(:array, *items)
+    def process_mrhs_new_from_args(first, last = nil)
+      process_array([*first, last])
+    end
+
+    def process_mrhs_add_star(before, rest)
+      s(:array, s(:splat, process(rest)))
     end
 
     def s(type, *children)
