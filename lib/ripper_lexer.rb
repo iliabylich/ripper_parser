@@ -121,18 +121,23 @@ module RipperLexer
       ref = process(ref)
       value = process(value)
 
+      reader_to_writer(ref).updated(nil, [*ref, value])
+    end
 
+    def reader_to_writer(ref)
       case ref.type
       when :const
-        ref.updated(:casgn, [*ref, value])
+        ref.updated(:casgn)
       when :lvar
-        ref.updated(:lvasgn, [*ref, value])
+        ref.updated(:lvasgn)
       when :gvar
-        ref.updated(:gvasgn, [*ref, value])
+        ref.updated(:gvasgn)
       when :ivar
-        ref.updated(:ivasgn, [*ref, value])
+        ref.updated(:ivasgn)
       when :cvar
-        ref.updated(:cvasgn, [*ref, value])
+        ref.updated(:cvasgn)
+      when :mlhs
+        s(:mlhs, *ref.children.map { |child| reader_to_writer(child) })
       else
         raise "Unsupport assign type #{ref.type}"
       end
@@ -530,6 +535,28 @@ module RipperLexer
     def process_top_const_field(const)
       _, const_name = *process(const)
       s(:const, s(:cbase), const_name)
+    end
+
+    def process_massign(mlhs, mrhs)
+      if mlhs[0] == :mlhs
+        # a single top-level mlhs
+        _, *mlhs = *mlhs
+      end
+
+      mlhs = s(:mlhs, *process_mlhs(*mlhs))
+      mlhs = reader_to_writer(mlhs)
+
+      s(:masgn, mlhs, process(mrhs))
+    end
+
+    def process_mlhs(*mlhs)
+      mlhs = mlhs.map { |lhs| process(lhs) }
+      mlhs = s(:mlhs, *mlhs)
+    end
+
+    def process_mrhs_new_from_args(first, last)
+      items = (first + [last]).map { |p| process(p) }
+      s(:array, *items)
     end
 
     def s(type, *children)
