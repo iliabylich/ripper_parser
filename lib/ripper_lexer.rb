@@ -582,7 +582,12 @@ module RipperLexer
     end
 
     def process_mrhs_add_star(before, rest)
-      s(:array, s(:splat, process(rest)))
+      if before && !before.empty?
+        before = process(before)
+      else
+        before = []
+      end
+      s(:array, *before, s(:splat, process(rest)))
     end
 
     def process_field(recv, dot, mid)
