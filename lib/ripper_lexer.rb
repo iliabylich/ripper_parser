@@ -477,6 +477,14 @@ module RipperLexer
         process(else_branch))
     end
 
+    def process_dot2(range_start, range_end)
+      s(:irange, process(range_start), process(range_end))
+    end
+
+    def process_dot3(range_start, range_end)
+      s(:erange, process(range_start), process(range_end))
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
