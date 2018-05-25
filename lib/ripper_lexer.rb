@@ -521,6 +521,17 @@ module RipperLexer
       s(:defined?, process(inner))
     end
 
+    def process_const_path_field(scope, const)
+      scope = process(scope)
+      _, const_name = *process(const)
+      s(:const, scope, const_name)
+    end
+
+    def process_top_const_field(const)
+      _, const_name = *process(const)
+      s(:const, s(:cbase), const_name)
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
