@@ -475,7 +475,7 @@ module RipperLexer
       send.updated(nil, [*send, *args])
     end
 
-    def process_call(recv, op, mid)
+    def process_call(recv, dot, mid)
       recv = process(recv)
       mid = process(mid)
       case mid
@@ -813,6 +813,23 @@ module RipperLexer
 
     def process_binary(lhs, op, rhs)
       s(:send, process(lhs), op, process(rhs))
+    end
+
+    def process_lambda(args, stmts)
+      args = process(args) || s(:args)
+      stmts = stmts.map { |stmt| process(stmt) }
+      body = case stmts.length
+      when 0
+        nil
+      when 1
+        stmts[0]
+      else
+        s(:begin, *stmts)
+      end
+
+      lambda_call = @builder.class.emit_lambda ? s(:lambda) : s(:send, nil, :lambda)
+
+      s(:block, lambda_call, args, body)
     end
 
     def s(type, *children)

@@ -27,6 +27,9 @@ module ParseHelper
 
     # Ripper cuts unary +
     %q{+2.0 ** 10},
+
+    # Ripper does not emit shadow args in arrow lambda
+    %q{->(a; foo, bar) { }},
   ]
 
 
