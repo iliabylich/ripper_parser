@@ -395,7 +395,7 @@ module RipperLexer
     end
 
     def process_dyna_symbol(parts)
-      parts = parts.map { |part| process(part) }
+      parts = parts.map { |part| process(part) }.compact
       interpolated = parts.any? { |part| part.type != :str }
 
       if interpolated
@@ -440,8 +440,41 @@ module RipperLexer
       s(:hash, *pairs)
     end
 
+    def process_hash(assoclist)
+      if assoclist.nil?
+        s(:hash)
+      else
+        s(:hash, *process(assoclist))
+      end
+    end
+
+    def process_assoclist_from_args(assocs)
+      assocs.map { |assoc| process(assoc) }
+    end
+
     def process_assoc_new(key, value)
-      s(:pair, process(key), process(value))
+      key = process(key)
+      key = s(:sym, key) if key.is_a?(Symbol) # label
+      s(:pair, key, process(value))
+    end
+
+    def process_assoc_splat(value)
+      s(:kwsplat, process(value))
+    end
+
+    def process_string_content
+      # no-op
+    end
+
+    def process_fcall(ident)
+      s(:send, nil, process(ident))
+    end
+
+    def process_ifop(cond, if_branch, else_branch)
+      s(:if,
+        process(cond),
+        process(if_branch),
+        process(else_branch))
     end
 
     def s(type, *children)
