@@ -11,6 +11,8 @@ module ParseHelper
   end
 
   EXCLUDES = [
+    # MRI parses heredocs a bit differently
+    # Most probably that's a bug in the Parser
     %Q{p <<~E\n\tx\n    y\nE},
     %Q{p <<~E\n\tx\n        y\nE},
     %Q{p <<~E\n    \tx\n        y\nE},
@@ -53,9 +55,21 @@ module ParserExt
   def parse(source_buffer)
     locals = @static_env.instance_eval { @variables.to_a }
     locals_code = locals.map { |l| "#{l} = nil; " }.join
-    source_buffer.instance_eval { @source = locals_code + @source }
+    source_buffer.instance_eval { @source = "nil;" + locals_code + @source }
     ast = super
-    ast ? ast.children[locals.count] : nil
+    if ast
+      children = ast.children[locals.count + 1..-1]
+      case children.length
+      when 0
+        nil
+      when 1
+        children[0]
+      else
+        @builder.send(:n, :begin, children, nil)
+      end
+    else
+      nil
+    end
   end
 end
 
@@ -76,7 +90,6 @@ module AstNodeExt
   def ==(other)
     a = self
     b = other
-
 
     a = a.with_joined_children(:str) if a.type == :dstr
     a = a.with_joined_children(:xstr) if a.type == :xstr

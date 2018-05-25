@@ -127,13 +127,25 @@ module RipperLexer
         ref.updated(:casgn, [*ref, value])
       when :lvar
         ref.updated(:lvasgn, [*ref, value])
+      when :gvar
+        ref.updated(:gvasgn, [*ref, value])
+      when :ivar
+        ref.updated(:ivasgn, [*ref, value])
+      when :cvar
+        ref.updated(:cvasgn, [*ref, value])
       else
         raise "Unsupport assign type #{ref.type}"
       end
     end
 
     def process_var_field(field)
-      s(:lvar, process(field))
+      field = process(field)
+      case field
+      when Symbol
+        s(:lvar, field)
+      else
+        field
+      end
     end
 
     define_method('process_@int') do |value, _location|
@@ -233,15 +245,12 @@ module RipperLexer
       s(:blockarg, process(name))
     end
 
-    def process_paren(inner)
-      type, *children = *inner
-      case type
-      when :params
-        process(inner)
-      when [:void_stmt]
-        s(:begin)
+    def process_paren(stmts)
+      stmts = stmts.map { |stmt| process(stmt) }
+      if stmts.length == 1
+        stmts[0] || s(:begin)
       else
-        raise "Unsupported paren child #{type}"
+        s(:begin, *stmts)
       end
     end
 
