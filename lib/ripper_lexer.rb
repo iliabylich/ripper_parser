@@ -193,7 +193,32 @@ module RipperLexer
       args = process(args)
       bodystmt = process(bodystmt)
 
+      case mid
+      when Symbol
+        # lowercased method name
+      when AST::Node
+        # Upcased method name
+        _, mid = *mid
+      end
+
       s(:def, mid, args, bodystmt)
+    end
+
+    def process_defs(definee, dot, mid, args, bodystmt)
+      definee = process(definee)
+      mid = process(mid)
+      args = process(args)
+      bodystmt = process(bodystmt)
+
+      case mid
+      when Symbol
+        # lowercased method name
+      when AST::Node
+        # Upcased method name
+        _, mid = *mid
+      end
+
+      s(:defs, definee, mid, args, bodystmt)
     end
 
     define_method('process_@ident') do |name, _location|
@@ -288,7 +313,12 @@ module RipperLexer
     end
 
     def process_paren(stmts)
-      stmts = stmts.map { |stmt| process(stmt) }
+      if stmts[0].is_a?(Symbol)
+        stmts = [process(stmts)]
+      else
+        stmts = stmts.map { |stmt| process(stmt) }
+      end
+
       if stmts.length == 1
         stmts[0] || s(:begin)
       else
@@ -318,7 +348,7 @@ module RipperLexer
           s(:const, s(:const, nil, :Encoding), :UTF_8)
         end
       else
-        raise "Unsupport keyword #{keyword}"
+        keyword.to_sym # wtf
       end
     end
 
@@ -448,7 +478,8 @@ module RipperLexer
       s(:send, recv, mid, *args)
     end
 
-    def process_vcall(mid)
+    def process_vcall(mid = nil)
+      return nil if mid.nil?
       s(:send, nil, process(mid))
     end
 
@@ -663,6 +694,11 @@ module RipperLexer
 
     def process_sclass(sclass_of, bodystmt)
       s(:sclass, process(sclass_of), process(bodystmt))
+    end
+
+    def process_undef(mids)
+      mids = mids.map { |mid| process(mid) }
+      s(:undef, *mids)
     end
 
     def s(type, *children)

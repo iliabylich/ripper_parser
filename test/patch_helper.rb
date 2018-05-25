@@ -93,12 +93,12 @@ module AstNodeExt
     a = self
     b = other
 
-    a = a.with_joined_children(:str) if a.type == :dstr
-    a = a.with_joined_children(:xstr) if a.type == :xstr
+    a = a.with_joined_children(:str) if a.is_a?(AST::Node) && a.type == :dstr
+    a = a.with_joined_children(:xstr) if a.is_a?(AST::Node) && a.type == :xstr
 
 
-    b = b.with_joined_children(:str) if b.type == :dstr
-    b = b.with_joined_children(:xstr) if b.type == :xstr
+    b = b.with_joined_children(:str) if b.is_a?(AST::Node) && b.type == :dstr
+    b = b.with_joined_children(:xstr) if b.is_a?(AST::Node) && b.type == :xstr
 
     if a.equal?(b)
       true
