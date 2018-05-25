@@ -198,15 +198,37 @@ module RipperLexer
     end
 
     def process_params(req, opt, rest, post, kwargs, kwrest, block)
-      req = req.map { |arg| process_arg(arg) }
-      opt = opt.map { |arg| process_optarg(*arg) }
-      rest = process(rest)
-      post = post.map { |arg| process_arg(arg) }
-      kwargs = kwargs.map { |arg| process_kwarg(arg) }
-      kwrest = process(kwrest)
-      block = process(block)
+      args = []
 
-      s(:args, *req, *opt, rest, *post, *kwargs, kwrest, block)
+      if req
+        args += req.map { |arg| process_arg(arg) }
+      end
+
+      if opt
+        args += opt.map { |arg| process_optarg(*arg) }
+      end
+
+      if rest
+        args << process(rest)
+      end
+
+      if post
+        args += post.map { |arg| process_arg(arg) }
+      end
+
+      if kwargs
+        args += kwargs.map { |arg| process_kwarg(arg) }
+      end
+
+      if kwrest
+        args << process(kwrest)
+      end
+
+      if block
+        args << process(block)
+      end
+
+      s(:args, *args)
     end
 
     def process_arg(arg)
@@ -609,6 +631,22 @@ module RipperLexer
       recv = process(recv)
       args = process(args)
       s(:index, recv, *args)
+    end
+
+    def process_opassign(recv, op, arg)
+      recv = reader_to_writer(process(recv))
+      op = process(op)
+      arg = process(arg)
+      case op
+      when '||='
+        s(:or_asgn, recv, arg)
+      else
+        s(:op_asgn, recv, op[0].to_sym, arg)
+      end
+    end
+
+    define_method('process_@op') do |value, _location|
+      value
     end
 
     def s(type, *children)
