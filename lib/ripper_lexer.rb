@@ -559,8 +559,8 @@ module RipperLexer
     end
 
     def process_mlhs(*mlhs)
-      mlhs = mlhs.map { |lhs| process(lhs) }
-      mlhs = s(:mlhs, *mlhs)
+      mlhs = mlhs.map { |lhs| process(lhs) }.compact
+      mlhs.any? ? s(:mlhs, *mlhs) : nil
     end
 
     def process_mrhs_new_from_args(first, last = nil)
