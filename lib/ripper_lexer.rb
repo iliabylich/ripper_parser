@@ -508,6 +508,10 @@ module RipperLexer
       end
     end
 
+    def process_defined(inner)
+      s(:defined?, process(inner))
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
