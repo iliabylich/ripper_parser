@@ -145,6 +145,11 @@ module RipperLexer
         else
           s(:splat)
         end
+      when :send
+        recv, mid = *ref
+        s(:send, recv, :"#{mid}=")
+      when :index
+        ref.updated(:indexasgn)
       else
         raise "Unsupport assign type #{ref.type}"
       end
@@ -535,8 +540,17 @@ module RipperLexer
 
     def process_const_path_field(scope, const)
       scope = process(scope)
-      _, const_name = *process(const)
-      s(:const, scope, const_name)
+      const = process(const)
+      case const
+      when Symbol
+        # method
+        s(:send, scope, const)
+      when ::AST::Node
+        _, const_name = *const
+        s(:const, scope, const_name)
+      else
+        raise "Unsupported const path #{const}"
+      end
     end
 
     def process_top_const_field(const)
@@ -569,6 +583,27 @@ module RipperLexer
 
     def process_mrhs_add_star(before, rest)
       s(:array, s(:splat, process(rest)))
+    end
+
+    def process_field(recv, dot, mid)
+      recv = process(recv)
+      mid = process(mid)
+      case mid
+      when Symbol
+        # method
+        s(:send, recv, mid)
+      when AST::Node
+        _, const_name = *mid
+        s(:send, recv, const_name)
+      else
+        raise "Unsupported field #{mid}"
+      end
+    end
+
+    def process_aref_field(recv, args)
+      recv = process(recv)
+      args = process(args)
+      s(:index, recv, *args)
     end
 
     def s(type, *children)
