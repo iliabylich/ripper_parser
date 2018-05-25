@@ -364,8 +364,28 @@ module RipperLexer
     def process_unary(sign, value)
       value = process(value)
       case sign
-      when :-@
-        value.updated(nil, [-value.children[0]])
+      when :'-@'
+        if %i[int float].include?(value.type)
+          value.updated(nil, [-value.children[0]])
+        else
+          s(:send, value, :'-@')
+        end
+      when :'+@'
+        if %i[int float].include?(value.type)
+          value.updated(nil, [+value.children[0]])
+        else
+          s(:send, value, :'+@')
+        end
+      when :'~'
+        if %i[int float].include?(value.type)
+          value.updated(nil, [~value.children[0]])
+        else
+          s(:send, value, :'~')
+        end
+      when :'!'
+        s(:send, value, :'!')
+      when :not
+        s(:send, value || s(:begin), :'!')
       else
         raise "Unsupported unary sign #{sign}"
       end
@@ -453,7 +473,18 @@ module RipperLexer
     end
 
     def process_call(recv, op, mid)
-      s(:send, process(recv), process(mid))
+      recv = process(recv)
+      mid = process(mid)
+      case mid
+      when Symbol
+        # lowercased method name
+      when ::AST::Node
+        _, mid = *mid
+      else
+        raise "Unsupported mid #{mid}"
+      end
+
+      s(:send, recv, mid)
     end
 
     def process_arg_paren(inner)
@@ -474,6 +505,15 @@ module RipperLexer
       recv = process(recv)
       mid = process(mid)
       args = process(args)
+
+      case mid
+      when Symbol
+        # lowercased method name
+      when ::AST::Node
+        _, mid = *mid
+      else
+        raise "Unsupported mid #{mid}"
+      end
 
       s(:send, recv, mid, *args)
     end
@@ -737,10 +777,20 @@ module RipperLexer
       s(:block, args, body)
     end
 
+    def process_do_block(args, stmt)
+      args = process(args) || s(:args)
+      stmt = process(stmt)
+      s(:block, args, stmt)
+    end
+
     def process_block_var(args, shadow_args)
       args = process(args)
       shadow_args = shadow_args ? shadow_args.map { |arg| s(:shadowarg, process(arg)) } : []
       args.updated(nil, [*args, *shadow_args])
+    end
+
+    def process_binary(lhs, op, rhs)
+      s(:send, process(lhs), op, process(rhs))
     end
 
     def s(type, *children)

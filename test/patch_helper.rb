@@ -23,7 +23,10 @@ module ParseHelper
     # Ripper doesn't distinguish string and symbol arrays
     %q{%i[foo bar]},
     %q{%I[foo #{bar}]},
-    %q{%I[foo#{bar}]}
+    %q{%I[foo#{bar}]},
+
+    # Ripper cuts unary +
+    %q{+2.0 ** 10},
   ]
 
 
