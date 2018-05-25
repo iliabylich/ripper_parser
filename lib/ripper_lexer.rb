@@ -124,7 +124,9 @@ module RipperLexer
       ref = process(ref)
       value = process(value)
 
-      reader_to_writer(ref).updated(nil, [*ref, value])
+      ref = reader_to_writer(ref)
+
+      ref.updated(nil, [*ref, value])
     end
 
     def reader_to_writer(ref)
@@ -149,8 +151,9 @@ module RipperLexer
           s(:splat)
         end
       when :send
-        recv, mid = *ref
-        s(:send, recv, :"#{mid}=")
+        recv, mid, *args = *ref
+        args ||= []
+        s(:send, recv, :"#{mid}=", *args)
       when :index
         ref.updated(:indexasgn)
       else
@@ -701,10 +704,29 @@ module RipperLexer
       end
     end
 
+    def process_aref(recv, args)
+      recv = process(recv)
+      if args[0].is_a?(Array)
+        args = [process(args[0])]
+      else
+        args = process(args)
+      end
+
+      if @builder.class.emit_index
+        s(:index, recv, *args)
+      else
+        s(:send, recv, :[], *args)
+      end
+    end
+
     def process_aref_field(recv, args)
       recv = process(recv)
       args = process(args)
-      s(:index, recv, *args)
+      if @builder.class.emit_index
+        s(:index, recv, *args)
+      else
+        s(:send, recv, :[], *args)
+      end
     end
 
     def process_opassign(recv, op, arg)
