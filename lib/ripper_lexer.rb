@@ -701,6 +701,14 @@ module RipperLexer
       s(:undef, *mids)
     end
 
+    def process_alias(old_id, new_id)
+      s(:alias, process(old_id), process(new_id))
+    end
+
+    def process_var_alias(old_id, new_id)
+      s(:alias, process(old_id), process(new_id))
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
