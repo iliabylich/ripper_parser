@@ -154,6 +154,10 @@ module RipperLexer
         recv, mid, *args = *ref
         args ||= []
         s(:send, recv, :"#{mid}=", *args)
+      when :csend
+        recv, mid, *args = *ref
+        args ||= []
+        s(:csend, recv, :"#{mid}=", *args)
       when :index
         ref.updated(:indexasgn)
       else
@@ -477,7 +481,7 @@ module RipperLexer
 
     def process_call(recv, dot, mid)
       recv = process(recv)
-      mid = process(mid)
+      mid = mid.is_a?(Symbol) ? mid : process(mid)
       case mid
       when Symbol
         # lowercased method name
@@ -487,7 +491,7 @@ module RipperLexer
         raise "Unsupported mid #{mid}"
       end
 
-      s(:send, recv, mid)
+      s(dot == :'&.' ? :csend : :send, recv, mid)
     end
 
     def process_arg_paren(inner)
@@ -504,7 +508,7 @@ module RipperLexer
       s(:send, nil, mid, *args)
     end
 
-    def process_command_call(recv, op, mid, args)
+    def process_command_call(recv, dot, mid, args)
       recv = process(recv)
       mid = process(mid)
       args = process(args)
@@ -518,7 +522,7 @@ module RipperLexer
         raise "Unsupported mid #{mid}"
       end
 
-      s(:send, recv, mid, *args)
+      s(dot == :'&.' ? :csend : :send, recv, mid, *args)
     end
 
     def process_vcall(mid = nil)
@@ -695,13 +699,13 @@ module RipperLexer
       case mid
       when Symbol
         # method
-        s(:send, recv, mid)
       when AST::Node
-        _, const_name = *mid
-        s(:send, recv, const_name)
+        _, mid = *mid
       else
         raise "Unsupported field #{mid}"
       end
+
+      s(dot == :'&.' ? :csend : :send, recv, mid)
     end
 
     def process_aref(recv, args)
@@ -731,7 +735,7 @@ module RipperLexer
 
     def process_opassign(recv, op, arg)
       recv = process(recv)
-      if recv.type != :send
+      if recv.type != :send && recv.type != :csend
         recv = reader_to_writer(recv)
       end
       op = process(op)
