@@ -408,6 +408,42 @@ module RipperLexer
       end
     end
 
+    def process_array(parts)
+      processed = []
+
+      while parts.any? do
+        part = parts.shift
+        case part
+        when :args_add_star
+          pre_splat = parts.shift
+          splat = parts.shift
+          processed += pre_splat.map { |p| process(p) }
+          processed << s(:splat, process(splat))
+        else
+          if part[0].is_a?(Symbol)
+            processed << process(part)
+          elsif part.is_a?(Array)
+            if part.length == 1 && part[0][0] == :@tstring_content
+              processed << process(part[0])
+            else
+              processed << s(:dstr, *part.map { |p| process(p) })
+            end
+          end
+        end
+      end
+
+      s(:array, *processed)
+    end
+
+    def process_bare_assoc_hash(assocs)
+      pairs = assocs.map { |assoc| process(assoc) }
+      s(:hash, *pairs)
+    end
+
+    def process_assoc_new(key, value)
+      s(:pair, process(key), process(value))
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end

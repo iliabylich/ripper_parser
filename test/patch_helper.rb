@@ -16,8 +16,14 @@ module ParseHelper
     %Q{p <<~E\n    \tx\n        y\nE},
     %Q{p <<~E\n        \tx\n\ty\nE},
     %Q{p <<~E\n    x\n  \\  y\nE},
-    %Q{p <<~E\n    x\n  \\\ty\nE}
+    %Q{p <<~E\n    x\n  \\\ty\nE},
+
+    # Ripper doesn't distinguish string and symbol arrays
+    %q{%i[foo bar]},
+    %q{%I[foo #{bar}]},
+    %q{%I[foo#{bar}]}
   ]
+
 
   def assert_parses(ast, code, source_maps='', versions=ALL_VERSIONS)
     return if EXCLUDES.include?(code)
