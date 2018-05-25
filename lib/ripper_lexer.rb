@@ -634,12 +634,17 @@ module RipperLexer
     end
 
     def process_opassign(recv, op, arg)
-      recv = reader_to_writer(process(recv))
+      recv = process(recv)
+      if recv.type != :send
+        recv = reader_to_writer(recv)
+      end
       op = process(op)
       arg = process(arg)
       case op
       when '||='
         s(:or_asgn, recv, arg)
+      when '&&='
+        s(:and_asgn, recv, arg)
       else
         s(:op_asgn, recv, op[0].to_sym, arg)
       end
