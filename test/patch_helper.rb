@@ -56,7 +56,7 @@ module AstNodeExt
       updated(new_type)
     elsif children.all? { |c| c.is_a?(AST::Node) && c.type == :str }
       # joining
-      updated(new_type, [children.map { |c| c.children[0] }.join])
+      original_dup.send(:initialize, new_type, [children.map { |c| c.children[0] }.join], {})
     else
       self
     end
@@ -66,8 +66,10 @@ module AstNodeExt
     a = self
     b = other
 
+
     a = a.with_joined_children(:str) if a.type == :dstr
     a = a.with_joined_children(:xstr) if a.type == :xstr
+
 
     b = b.with_joined_children(:str) if b.type == :dstr
     b = b.with_joined_children(:xstr) if b.type == :xstr
