@@ -251,6 +251,8 @@ module RipperLexer
         s(:int, line)
       when '__FILE__'
         s(:str, @file)
+      when 'self'
+        s(:self)
       else
         raise "Unsupport keyword #{keyword}"
       end
@@ -483,6 +485,14 @@ module RipperLexer
 
     def process_dot3(range_start, range_end)
       s(:erange, process(range_start), process(range_end))
+    end
+
+    define_method('process_@backref') do |value, _location|
+      if match = value.match(/\$(\d+)/)
+        s(:nth_ref, match[1].to_i)
+      else
+        s(:back_ref, value.to_sym)
+      end
     end
 
     def s(type, *children)
