@@ -236,7 +236,7 @@ module RipperLexer
         args += opt.map { |arg| process_optarg(*arg) }
       end
 
-      if rest
+      if !rest.nil? && rest != 0
         args << process(rest)
       end
 
@@ -448,7 +448,7 @@ module RipperLexer
 
     def process_method_add_arg(call, args)
       send = process(call)
-      args = process(args)
+      args = args.empty? ? s(:args) : process(args)
       send.updated(nil, [*send, *args])
     end
 
@@ -707,6 +707,40 @@ module RipperLexer
 
     def process_var_alias(old_id, new_id)
       s(:alias, process(old_id), process(new_id))
+    end
+
+    def process_method_add_block(method_call, block)
+      method_call = process(method_call)
+      block = process(block)
+      block.updated(nil, [method_call, *block])
+    end
+
+    def process_brace_block(args, stmts)
+      invisible_rest = args && args[1] && args[1][3] && args[1][3] == 0
+      args = process(args) || s(:args)
+
+      if args.children.length == 1 && args.children[0].type == :arg && !invisible_rest && @builder.class.emit_procarg0
+        args = s(:args, args.children[0].updated(:procarg0))
+      end
+
+      stmts = stmts.map { |stmt| process(stmt) }
+
+      body = case stmts.length
+      when 0
+        nil
+      when 1
+        stmts[0]
+      else
+        s(:begin, *stmts)
+      end
+
+      s(:block, args, body)
+    end
+
+    def process_block_var(args, shadow_args)
+      args = process(args)
+      shadow_args = shadow_args ? shadow_args.map { |arg| s(:shadowarg, process(arg)) } : []
+      args.updated(nil, [*args, *shadow_args])
     end
 
     def s(type, *children)
