@@ -26,6 +26,10 @@ module ParseHelper
       try_parsing(ast, code, parser, source_maps, version)
     end
   end
+
+  def assert_diagnoses(diagnostic, code, source_maps='', versions=ALL_VERSIONS)
+    # we can't emit diagnostics
+  end
 end
 
 module Parser
@@ -44,7 +48,8 @@ module ParserExt
     locals = @static_env.instance_eval { @variables.to_a }
     locals_code = locals.map { |l| "#{l} = nil; " }.join
     source_buffer.instance_eval { @source = locals_code + @source }
-    super.children[locals.count]
+    ast = super
+    ast ? ast.children[locals.count] : nil
   end
 end
 

@@ -302,6 +302,17 @@ module RipperLexer
       end
     end
 
+    def process_regexp_literal(parts, modifiers)
+      parts = parts.map { |part| process(part) }
+      modifiers = process(modifiers)
+      s(:regexp, *parts, modifiers)
+    end
+
+    define_method('process_@regexp_end') do |value, _location|
+      modifiers = value.chars[1..-1].map(&:to_sym).sort
+      s(:regopt, *modifiers)
+    end
+
     define_method('process_@tstring_content') do |value, _location|
       s(:str, value)
     end
