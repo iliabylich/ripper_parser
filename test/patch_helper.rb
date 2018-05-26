@@ -106,8 +106,6 @@ module AstNodeExt
   end
 
   def ==(other)
-    return false if other.nil?
-
     a = self
     b = other
 
@@ -123,8 +121,7 @@ module AstNodeExt
       true
     elsif b.respond_to? :to_ast
       b = b.to_ast
-      b.type == a.type &&
-        b.children == a.children
+      b.type == a.type && b.children == a.children
     else
       false
     end

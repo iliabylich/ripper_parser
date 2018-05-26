@@ -641,10 +641,10 @@ module RipperLexer
       s(:send, nil, process(ident))
     end
 
-    def process_ifop(cond, if_branch, else_branch)
+    def process_ifop(cond, then_branch, else_branch)
       s(:if,
         process(cond),
-        process(if_branch),
+        process(then_branch),
         process(else_branch))
     end
 
@@ -887,6 +887,42 @@ module RipperLexer
 
     def process_yield0
       s(:yield)
+    end
+
+    def process_if(cond, then_branch, else_branch)
+      then_branch = s(:begin, *then_branch.map { |stmt| process(stmt) })
+      else_branch = process(else_branch) if else_branch
+      s(:if, process(cond), then_branch, else_branch)
+    end
+
+    def process_if_mod(cond, then_branch)
+      s(:if, process(cond), process(then_branch), nil)
+    end
+
+    def process_else(stmts)
+      stmts = stmts.map { |stmt| process(stmt) }.compact
+      case stmts.length
+      when 0
+        nil
+      when 1
+        stmts[0]
+      else
+        s(:begin, *stmts)
+      end
+    end
+
+    def process_elsif(cond, then_branch, else_branch)
+      process_if(cond, then_branch, else_branch)
+    end
+
+    def process_unless(cond, then_branch, else_branch)
+      then_branch = s(:begin, *then_branch.map { |stmt| process(stmt) })
+      else_branch = process(else_branch) if else_branch
+      s(:if, process(cond), else_branch, then_branch)
+    end
+
+    def process_unless_mod(cond, then_branch)
+      s(:if, process(cond), nil, process(then_branch))
     end
 
     def s(type, *children)
