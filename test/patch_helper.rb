@@ -30,6 +30,10 @@ module ParseHelper
 
     # Ripper does not emit shadow args in arrow lambda
     %q{->(a; foo, bar) { }},
+
+    # Ripper doesn't handle local assigns
+    # produced by matching regexs
+    %q{/(?<match>bar)/ =~ 'bar'; match},
   ]
 
 
