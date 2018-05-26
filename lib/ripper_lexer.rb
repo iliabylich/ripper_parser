@@ -69,7 +69,7 @@ module RipperLexer
     def process_args_sequence(nodes)
       processed = []
 
-      while nodes.any? do
+      while nodes && nodes.any? do
         node = nodes.shift
         case node
         when :args_add_star
@@ -387,7 +387,7 @@ module RipperLexer
       if bodystmt.nil?
         s(:kwbegin)
       else
-        bodystmt.updated(:kwbegin)
+        s(:kwbegin, bodystmt)
       end
     end
 
@@ -924,6 +924,39 @@ module RipperLexer
       conds = process_args_sequence(conds) { |non_splat| process(non_splat) }
       stmt = to_single_node(process_many(stmts))
       s(:when, *conds, stmt)
+    end
+
+    def process_while(cond, stmts)
+      s(:while, process(cond), to_single_node(process_many(stmts)))
+    end
+
+    def process_while_mod(cond, stmt)
+      stmt = process(stmt)
+      while_type = stmt.type == :kwbegin ? :while_post : :while
+      s(while_type, process(cond), stmt)
+    end
+
+    def process_until(cond, stmts)
+      s(:until, process(cond), to_single_node(process_many(stmts)))
+    end
+
+    def process_until_mod(cond, stmt)
+      stmt = process(stmt)
+      until_type = stmt.type == :kwbegin ? :until_post : :until
+      s(until_type, process(cond), stmt)
+    end
+
+    def process_for(vars, in_var, stmts)
+      if vars[0].is_a?(Array)
+        vars = s(:mlhs, *process_many(vars))
+      else
+        vars = process(vars)
+      end
+
+      in_var = process(in_var)
+      stmts = to_single_node(process_many(stmts).compact)
+
+      s(:for, reader_to_writer(vars), in_var, stmts)
     end
 
     def s(type, *children)
