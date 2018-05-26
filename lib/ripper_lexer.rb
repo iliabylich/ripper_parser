@@ -843,7 +843,17 @@ module RipperLexer
     end
 
     def process_binary(lhs, op, rhs)
-      s(:send, process(lhs), op, process(rhs))
+      lhs = process(lhs)
+      rhs = process(rhs)
+
+      case op
+      when :and, :'&&'
+        s(:and, lhs, rhs)
+      when :or, :'||'
+        s(:or, lhs, rhs)
+      else
+        s(:send, lhs, op, rhs)
+      end
     end
 
     def process_lambda(args, stmts)
