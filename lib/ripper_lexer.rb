@@ -836,6 +836,14 @@ module RipperLexer
       s(:block, lambda_call, args, body)
     end
 
+    def process_super(args)
+      s(:super, *process(args))
+    end
+
+    def process_zsuper
+      s(:zsuper)
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
