@@ -66,6 +66,25 @@ module RipperLexer
       end
     end
 
+    def process_args_sequence(nodes)
+      processed = []
+
+      while nodes.any? do
+        node = nodes.shift
+        case node
+        when :args_add_star
+          pre_splat = nodes.shift
+          splat = nodes.shift
+          processed += process_many(pre_splat)
+          processed << s(:splat, process(splat))
+        else
+          processed << yield(node)
+        end
+      end
+
+      processed
+    end
+
     def process_program(stmts, *rest)
       to_single_node(process_many(stmts))
     end
@@ -509,26 +528,13 @@ module RipperLexer
     end
 
     def process_args_add_block(parts, block)
-      processed = []
-
-      while parts.any? do
-        part = parts.shift
-        case part
-        when :args_add_star
-          pre_splat = parts.shift
-          splat = parts.shift
-          processed += process_many(pre_splat)
-          processed << s(:splat, process(splat))
-        else
-          processed << process(part)
-        end
-      end
+      args = process_args_sequence(parts) { |non_splat| process(non_splat) }
 
       if block
-        processed << s(:block_pass, process(block))
+        args << s(:block_pass, process(block))
       end
 
-      processed
+      args
     end
 
     def process_command(mid, args)
@@ -582,25 +588,14 @@ module RipperLexer
     end
 
     def process_array(parts)
-      processed = []
-
-      while parts.any? do
-        part = parts.shift
-        case part
-        when :args_add_star
-          pre_splat = parts.shift
-          splat = parts.shift
-          processed += process_many(pre_splat)
-          processed << s(:splat, process(splat))
-        else
-          if part[0].is_a?(Symbol)
-            processed << process(part)
-          elsif part.is_a?(Array)
-            if part.length == 1 && part[0][0] == :@tstring_content
-              processed << process(part[0])
-            else
-              processed << s(:dstr, *process_many(part))
-            end
+      processed = process_args_sequence(parts) do |non_splat|
+        if non_splat[0].is_a?(Symbol)
+          process(non_splat)
+        elsif non_splat.is_a?(Array)
+          if non_splat.length == 1 && non_splat[0][0] == :@tstring_content
+            process(non_splat[0])
+          else
+            s(:dstr, *process_many(non_splat))
           end
         end
       end
@@ -918,13 +913,17 @@ module RipperLexer
         whens_tree = whens_tree[0]
       end
 
+      if whens.last[0] != :else
+        whens << [:else, []]
+      end
+
       s(:case, process(cond), *process_many(whens))
     end
 
     def process_when(conds, stmts)
-      cond = to_single_node(process_many(conds))
+      conds = process_args_sequence(conds) { |non_splat| process(non_splat) }
       stmt = to_single_node(process_many(stmts))
-      s(:when, cond, stmt)
+      s(:when, *conds, stmt)
     end
 
     def s(type, *children)
