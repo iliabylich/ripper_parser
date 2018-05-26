@@ -736,7 +736,7 @@ module RipperLexer
     def process_aref(recv, args)
       recv = process(recv)
       if args[0].is_a?(Array)
-        args = [process(args[0])]
+        args = args.map { |a| process(a) }
       else
         args = process(args)
       end
