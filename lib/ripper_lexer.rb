@@ -844,6 +844,14 @@ module RipperLexer
       s(:zsuper)
     end
 
+    def process_yield(args)
+      s(:yield, *process(args))
+    end
+
+    def process_yield0
+      s(:yield)
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
