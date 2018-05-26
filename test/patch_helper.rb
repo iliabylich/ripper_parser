@@ -34,6 +34,17 @@ module ParseHelper
     # Ripper doesn't handle local assigns
     # produced by matching regexs
     %q{/(?<match>bar)/ =~ 'bar'; match},
+
+    # flipsflops, who cares
+    %q{if foo..bar; end},
+    %q{!(foo..bar)},
+    %q{if foo...bar; end},
+    %q{!(foo...bar)},
+
+    # match_current_line constructions, maybe can be fixed
+    # without doing scary things on the AST level
+    %q{if /wat/; end},
+    %q{!/wat/},
   ]
 
 
