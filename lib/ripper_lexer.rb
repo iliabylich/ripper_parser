@@ -959,6 +959,45 @@ module RipperLexer
       s(:for, reader_to_writer(vars), in_var, stmts)
     end
 
+    def process_break(args)
+      if args.nil? || args.empty?
+        args = []
+      elsif args[0].is_a?(Array)
+        args = process_many(args)
+      else
+        args = process(args)
+      end
+      s(:break, *args)
+    end
+
+    def process_return(value)
+      if value[0].is_a?(Array)
+        value = to_single_node(process_many(value))
+      else
+        value = s(:begin, *process(value))
+      end
+
+      s(:return, value)
+    end
+
+    def process_return0
+      s(:return)
+    end
+
+    def process_next(value)
+      if value.empty?
+        s(:next)
+      elsif value[0].is_a?(Array)
+        s(:next, to_single_node(process_many(value)))
+      else
+        s(:next, s(:begin, *process(value)))
+      end
+    end
+
+    def process_redo
+      s(:redo)
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end

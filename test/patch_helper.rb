@@ -45,6 +45,11 @@ module ParseHelper
     # without doing scary things on the AST level
     %q{if /wat/; end},
     %q{!/wat/},
+
+    # FIXME
+    %q{break fun foo do end},
+    %q{return fun foo do end},
+    %q{next fun foo do end},
   ]
 
 
