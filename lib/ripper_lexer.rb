@@ -51,13 +51,23 @@ module RipperLexer
 
     private
 
-    def process_program(stmts, *rest)
-      stmts = stmts.map { |stmt| process(stmt)  }
-      if stmts.length == 1
-        stmts[0]
+    def process_many(nodes)
+      nodes.map { |node| process(node) }
+    end
+
+    def to_single_node(nodes)
+      case nodes.length
+      when 0
+        nil
+      when 1
+        nodes[0]
       else
-        s(:begin, *stmts)
+        s(:begin, *nodes)
       end
+    end
+
+    def process_program(stmts, *rest)
+      to_single_node(process_many(stmts))
     end
 
     def process_void_stmt
@@ -108,15 +118,7 @@ module RipperLexer
     end
 
     def process_bodystmt(stmts, _, _, _)
-      stmts = stmts.map { |stmt| process(stmt) }.compact
-      case stmts.length
-      when 0
-        nil
-      when 1
-        stmts[0]
-      else
-        s(:begin, *stmts)
-      end
+      to_single_node(process_many(stmts))
     end
 
     # ref = value
@@ -325,7 +327,7 @@ module RipperLexer
       if stmts[0].is_a?(Symbol)
         stmts = [process(stmts)]
       else
-        stmts = stmts.map { |stmt| process(stmt) }
+        stmts = process_many(stmts)
       end
 
       if stmts.length == 1
@@ -402,7 +404,7 @@ module RipperLexer
 
     def process_string_literal(string_content)
       _, *parts = string_content
-      parts = parts.map { |part| process(part) }
+      parts = process_many(parts)
       interpolated = parts.any? { |part| part.type != :str }
 
       if interpolated
@@ -415,7 +417,7 @@ module RipperLexer
     end
 
     def process_xstring_literal(parts)
-      parts = parts.map { |part| process(part) }
+      parts = process_many(parts)
       interpolated = parts.any? { |part| part.type != :str }
 
       if interpolated
@@ -428,7 +430,7 @@ module RipperLexer
     end
 
     def process_regexp_literal(parts, modifiers)
-      parts = parts.map { |part| process(part) }
+      parts = process_many(parts)
       modifiers = process(modifiers)
       s(:regexp, *parts, modifiers)
     end
@@ -467,7 +469,7 @@ module RipperLexer
     end
 
     def process_string_concat(*strings)
-      strings = strings.map { |s| process(s) }
+      strings = process_many(strings)
       s(:dstr, *strings)
     end
 
@@ -500,7 +502,7 @@ module RipperLexer
       if inner.nil?
         nil
       elsif inner[0].is_a?(Array)
-        [process(inner[0])]
+        process_many(inner)
       else
         process(inner)
       end
@@ -515,7 +517,7 @@ module RipperLexer
         when :args_add_star
           pre_splat = parts.shift
           splat = parts.shift
-          processed += pre_splat.map { |p| process(p) }
+          processed += process_many(pre_splat)
           processed << s(:splat, process(splat))
         else
           processed << process(part)
@@ -566,7 +568,7 @@ module RipperLexer
     end
 
     def process_dyna_symbol(parts)
-      parts = parts.map { |part| process(part) }.compact
+      parts = process_many(parts).compact
       interpolated = parts.any? { |part| part.type != :str }
 
       if interpolated
@@ -588,7 +590,7 @@ module RipperLexer
         when :args_add_star
           pre_splat = parts.shift
           splat = parts.shift
-          processed += pre_splat.map { |p| process(p) }
+          processed += process_many(pre_splat)
           processed << s(:splat, process(splat))
         else
           if part[0].is_a?(Symbol)
@@ -597,7 +599,7 @@ module RipperLexer
             if part.length == 1 && part[0][0] == :@tstring_content
               processed << process(part[0])
             else
-              processed << s(:dstr, *part.map { |p| process(p) })
+              processed << s(:dstr, *process_many(part))
             end
           end
         end
@@ -607,7 +609,7 @@ module RipperLexer
     end
 
     def process_bare_assoc_hash(assocs)
-      pairs = assocs.map { |assoc| process(assoc) }
+      pairs = process_many(assocs)
       s(:hash, *pairs)
     end
 
@@ -620,7 +622,7 @@ module RipperLexer
     end
 
     def process_assoclist_from_args(assocs)
-      assocs.map { |assoc| process(assoc) }
+      process_many(assocs)
     end
 
     def process_assoc_new(key, value)
@@ -703,7 +705,7 @@ module RipperLexer
     end
 
     def process_mlhs(*mlhs)
-      mlhs = mlhs.map { |lhs| process(lhs) }.compact
+      mlhs = process_many(mlhs).compact
       mlhs.any? ? s(:mlhs, *mlhs) : nil
     end
 
@@ -738,7 +740,7 @@ module RipperLexer
     def process_aref(recv, args)
       recv = process(recv)
       if args[0].is_a?(Array)
-        args = args.map { |a| process(a) }
+        args = process_many(args)
       else
         args = process(args)
       end
@@ -790,7 +792,7 @@ module RipperLexer
     end
 
     def process_undef(mids)
-      mids = mids.map { |mid| process(mid) }
+      mids = process_many(mids)
       s(:undef, *mids)
     end
 
@@ -816,16 +818,7 @@ module RipperLexer
         args = s(:args, args.children[0].updated(:procarg0))
       end
 
-      stmts = stmts.map { |stmt| process(stmt) }
-
-      body = case stmts.length
-      when 0
-        nil
-      when 1
-        stmts[0]
-      else
-        s(:begin, *stmts)
-      end
+      body = to_single_node(process_many(stmts))
 
       s(:block, args, body)
     end
@@ -858,7 +851,7 @@ module RipperLexer
 
     def process_lambda(args, stmts)
       args = process(args) || s(:args)
-      stmts = stmts.map { |stmt| process(stmt) }
+      stmts = process_many(stmts)
       body = case stmts.length
       when 0
         nil
@@ -890,7 +883,7 @@ module RipperLexer
     end
 
     def process_if(cond, then_branch, else_branch)
-      then_branch = s(:begin, *then_branch.map { |stmt| process(stmt) })
+      then_branch = s(:begin, *process_many(then_branch))
       else_branch = process(else_branch) if else_branch
       s(:if, process(cond), then_branch, else_branch)
     end
@@ -900,15 +893,7 @@ module RipperLexer
     end
 
     def process_else(stmts)
-      stmts = stmts.map { |stmt| process(stmt) }.compact
-      case stmts.length
-      when 0
-        nil
-      when 1
-        stmts[0]
-      else
-        s(:begin, *stmts)
-      end
+      to_single_node(process_many(stmts).compact)
     end
 
     def process_elsif(cond, then_branch, else_branch)
@@ -916,13 +901,30 @@ module RipperLexer
     end
 
     def process_unless(cond, then_branch, else_branch)
-      then_branch = s(:begin, *then_branch.map { |stmt| process(stmt) })
+      then_branch = s(:begin, *process_many(then_branch))
       else_branch = process(else_branch) if else_branch
       s(:if, process(cond), else_branch, then_branch)
     end
 
     def process_unless_mod(cond, then_branch)
       s(:if, process(cond), nil, process(then_branch))
+    end
+
+    def process_case(cond, whens_tree)
+      whens = []
+
+      while whens_tree do
+        whens << whens_tree.shift(3)
+        whens_tree = whens_tree[0]
+      end
+
+      s(:case, process(cond), *process_many(whens))
+    end
+
+    def process_when(conds, stmts)
+      cond = to_single_node(process_many(conds))
+      stmt = to_single_node(process_many(stmts))
+      s(:when, cond, stmt)
     end
 
     def s(type, *children)
