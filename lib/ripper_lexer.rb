@@ -320,6 +320,8 @@ module RipperLexer
     end
 
     def process_paren(stmts)
+      return s(:begin) unless stmts.is_a?(Array)
+
       if stmts[0].is_a?(Symbol)
         stmts = [process(stmts)]
       else

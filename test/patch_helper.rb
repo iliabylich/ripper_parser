@@ -97,6 +97,14 @@ module AstNodeExt
     end
   end
 
+  def with_unwrapped_begin
+    if type == :begin && children.length == 1
+      children[0]
+    else
+      self
+    end
+  end
+
   def ==(other)
     return false if other.nil?
 
@@ -105,10 +113,11 @@ module AstNodeExt
 
     a = a.with_joined_children(:str) if a.is_a?(AST::Node) && a.type == :dstr
     a = a.with_joined_children(:xstr) if a.is_a?(AST::Node) && a.type == :xstr
-
+    a = a.with_unwrapped_begin if a.is_a?(AST::Node) && a.type == :begin
 
     b = b.with_joined_children(:str) if b.is_a?(AST::Node) && b.type == :dstr
     b = b.with_joined_children(:xstr) if b.is_a?(AST::Node) && b.type == :xstr
+    b = b.with_unwrapped_begin if b.is_a?(AST::Node) && b.type == :begin
 
     if a.equal?(b)
       true
