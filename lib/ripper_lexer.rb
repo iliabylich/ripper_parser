@@ -495,11 +495,36 @@ module RipperLexer
     end
 
     def process_arg_paren(inner)
-      process(inner)
+      if inner.nil?
+        nil
+      elsif inner[0].is_a?(Array)
+        [process(inner[0])]
+      else
+        process(inner)
+      end
     end
 
-    def process_args_add_block(args, _)
-      args.map { |a| process(a) }
+    def process_args_add_block(parts, block)
+      processed = []
+
+      while parts.any? do
+        part = parts.shift
+        case part
+        when :args_add_star
+          pre_splat = parts.shift
+          splat = parts.shift
+          processed += pre_splat.map { |p| process(p) }
+          processed << s(:splat, process(splat))
+        else
+          processed << process(part)
+        end
+      end
+
+      if block
+        processed << s(:block_pass, process(block))
+      end
+
+      processed
     end
 
     def process_command(mid, args)
