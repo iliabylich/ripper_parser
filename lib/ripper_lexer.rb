@@ -156,7 +156,7 @@ module RipperLexer
       end
 
       if rescue_handlers.is_a?(Array)
-        body = s(:rescue, *body, *rescue_handlers, else_body)
+        body = s(:rescue, body, *rescue_handlers, else_body)
       end
 
       if ensure_body
@@ -436,10 +436,18 @@ module RipperLexer
       when 'false'
         s(:false)
       when '__LINE__'
-        line, col = location
-        s(:int, line)
+        if @builder.emit_file_line_as_literals
+          line, _col = location
+          s(:int, line)
+        else
+          s(:__LINE__)
+        end
       when '__FILE__'
-        s(:str, @file)
+        if @builder.emit_file_line_as_literals
+          s(:str, @file)
+        else
+          s(:__FILE__)
+        end
       when 'self'
         s(:self)
       when '__ENCODING__'
@@ -498,7 +506,7 @@ module RipperLexer
 
     def process_string_literal(string_content)
       _, *parts = string_content
-      parts = process_many(parts)
+      parts = process_many(parts).compact
       interpolated = parts.any? { |part| part.type != :str }
 
       if interpolated
@@ -538,7 +546,7 @@ module RipperLexer
 
     def process_string_embexpr((expr))
       expr = process(expr)
-      if expr.type != :begin
+      if expr && expr.type != :begin
         expr = s(:begin, expr)
       end
       expr
@@ -807,7 +815,9 @@ module RipperLexer
 
     def process_aref(recv, args)
       recv = process(recv)
-      if args[0].is_a?(Array)
+      if args.nil?
+        args = []
+      elsif args[0].is_a?(Array)
         args = process_many(args)
       else
         args = process(args)

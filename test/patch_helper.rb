@@ -89,7 +89,11 @@ module ParseHelper
     end
   end
 
-  def assert_diagnoses(diagnostic, code, source_maps='', versions=ALL_VERSIONS)
+  def assert_diagnoses(*)
+    # we can't emit diagnostics
+  end
+
+  def assert_diagnoses_many(*)
     # we can't emit diagnostics
   end
 
@@ -97,7 +101,7 @@ module ParseHelper
     # there's no exposable context in the Ripper
   end
 
-  def assert_equal(expected, actual, message)
+  def assert_equal(expected, actual, message = 'expected to be equal')
     if expected.is_a?(AST::Node)
       expected = AstMinimizer.instance.process(expected)
     end
@@ -141,8 +145,8 @@ class AstMinimizer < Parser::AST::Processor
     node = super
     children = node.children
 
-    if children.empty?
-      process node.updated(:str)
+    if children.empty? || children.all?(&:nil?)
+      process node.updated(:str, [])
     elsif children.all? { |c| c.is_a?(AST::Node) && c.type == :str }
       process node.updated(:str, [JOIN_STR_NODES.call(children)])
     else
@@ -190,6 +194,9 @@ class AstMinimizer < Parser::AST::Processor
     node
   end
 
+  # We need to have this handlers
+  # to support custom 'process' method
+  # that allows rewriting nodes to nil
   def on_float(node); node; end
   def on_self(node); node; end
   def on_complex(node); node; end
@@ -201,21 +208,18 @@ class AstMinimizer < Parser::AST::Processor
   def on___ENCODING__(node); node; end
   def on_zsuper(node); node; end
   def on_nil(node); node; end
+  def on___FILE__(node); node; end
+  def on___LINE__(node); node; end
+  def on_cbase(node); node; end
+  def on_regopt(node); node; end
 
   # Patched version that allows rewriting
   # nodes to nils.
   def process(node)
     return if node.nil?
-
     node = node.to_ast
-
-    # Invoke a specific handler
     on_handler = :"on_#{node.type}"
-    if respond_to? on_handler
-      send on_handler, node
-    else
-      handler_missing(node)
-    end
+    send on_handler, node
   end
 
   class << self
