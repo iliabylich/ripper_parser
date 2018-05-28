@@ -136,8 +136,79 @@ module RipperLexer
       const_name.to_sym
     end
 
-    def process_bodystmt(stmts, _, _, _)
-      to_single_node(process_many(stmts))
+    def process_bodystmt(stmts, rescue_handlers, else_node, ensure_body)
+      begin_body = to_single_node(process_many(stmts).compact)
+      begin_body = s(:begin, begin_body) if begin_body && begin_body.type != :begin
+      rescue_handlers = process(rescue_handlers)
+      else_body = process(else_node)
+      else_body = s(:begin, else_body) if else_body
+
+      body = begin_body
+
+      # Special case of
+      # begin; 1; else; 2; end
+      if ensure_body.nil? && rescue_handlers.nil?
+        if body.nil? && else_body.nil?
+          return nil
+        else
+          return s(:begin, *[*body, else_body].compact)
+        end
+      end
+
+      if rescue_handlers.is_a?(Array)
+        body = s(:rescue, *body, *rescue_handlers, else_body)
+      end
+
+      if ensure_body
+        ensure_body = process(ensure_body)
+        ensure_stmts = []
+
+        if body && body.type == :begin
+          ensure_stmts += body.children
+        else
+          ensure_stmts << body
+        end
+
+        if ensure_body && ensure_body.type == :begin
+          ensure_stmts += ensure_body.children
+        else
+          ensure_stmts << ensure_body
+        end
+
+        body = s(:ensure, *ensure_stmts)
+      end
+
+      body
+    end
+
+    def process_rescue(klasses, var, stmts, nested)
+      if klasses && klasses[0].is_a?(Array)
+        klasses = process_many(klasses)
+      else
+        klasses = process(klasses)
+      end
+
+      if klasses.is_a?(Array)
+        klasses = s(:array, *klasses)
+      end
+
+      var = process(var)
+      var = reader_to_writer(var) if var
+      stmts = to_single_node(process_many(stmts))
+
+      nested = process(nested)
+
+      [s(:resbody, klasses, var, stmts), *nested]
+    end
+
+    def process_rescue_mod(bodystmt, rescue_handler)
+      bodystmt = process(bodystmt)
+      rescue_handler = process(rescue_handler)
+      s(:rescue, bodystmt, s(:resbody, nil, nil, rescue_handler), nil)
+    end
+
+    def process_ensure(body)
+      to_single_node(process_many(body).compact)
     end
 
     # ref = value
@@ -386,6 +457,10 @@ module RipperLexer
       bodystmt = process(bodystmt)
       if bodystmt.nil?
         s(:kwbegin)
+      elsif bodystmt.type == :begin
+        bodystmt.updated(:kwbegin)
+      elsif bodystmt.type == :kwbegin
+        bodystmt
       else
         s(:kwbegin, bodystmt)
       end
@@ -996,6 +1071,10 @@ module RipperLexer
 
     def process_redo
       s(:redo)
+    end
+
+    def process_retry
+      s(:retry)
     end
 
     def s(type, *children)
