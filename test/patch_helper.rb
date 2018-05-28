@@ -96,6 +96,23 @@ module ParseHelper
   def assert_context(*)
     # there's no exposable context in the Ripper
   end
+
+  def assert_equal(expected, actual, message)
+    if actual.is_a?(AST::Node)
+      actual = AstMinimizer.instance.process(actual)
+    end
+
+    if expected.is_a?(AST::Node)
+      expected = AstMinimizer.instance.process(expected)
+    end
+
+    if expected.nil?
+      # s(:begin) -> nil
+      assert_nil actual, message
+    else
+      super(actual, expected, message)
+    end
+  end
 end
 
 module Parser
@@ -133,53 +150,76 @@ end
 
 Parser::Ruby25.prepend(ParserExt)
 
-class Minimizer < Parser::AST::Processor
-  def on_begin(node)
-    binding.pry
-  end
-end
+class AstMinimizer < Parser::AST::Processor
+  JOIN_STR_NODES = ->(nodes) { nodes.map { |node| node.children[0] }.join }
 
-module AstNodeExt
-  def with_joined_children(new_type)
+  def on_dstr(node)
+    children = node.children
+
     if children.empty?
-      updated(new_type)
+      process node.updated(:str)
     elsif children.all? { |c| c.is_a?(AST::Node) && c.type == :str }
-      # joining
-      original_dup.send(:initialize, new_type, [children.map { |c| c.children[0] }.join], {})
+      process node.updated(:str, [JOIN_STR_NODES.call(children)])
     else
-      self
+      super
     end
   end
 
-  def with_unwrapped_begin
-    if type == :begin && children.length == 1
-      children[0]
+  def on_xstr(node)
+    children = node.children
+
+    if children.all? { |c| c.is_a?(AST::Node) && c.type == :str }
+      content = JOIN_STR_NODES.call(children)
+      str = Parser::AST::Node.new(:str, [content])
+      node.updated(nil, [str])
     else
-      self
+      super
     end
   end
 
-  def ==(other)
-    a = self
-    b = other
-
-    a = a.with_joined_children(:str) if a.is_a?(AST::Node) && a.type == :dstr
-    a = a.with_joined_children(:xstr) if a.is_a?(AST::Node) && a.type == :xstr
-    a = a.with_unwrapped_begin if a.is_a?(AST::Node) && a.type == :begin
-
-    b = b.with_joined_children(:str) if b.is_a?(AST::Node) && b.type == :dstr
-    b = b.with_joined_children(:xstr) if b.is_a?(AST::Node) && b.type == :xstr
-    b = b.with_unwrapped_begin if b.is_a?(AST::Node) && b.type == :begin
-
-    if a.equal?(b)
-      true
-    elsif b.respond_to? :to_ast
-      b = b.to_ast
-      b.type == a.type && b.children == a.children
+  def on_begin(node)
+    case node.children.length
+    when 0
+      nil
+    when 1
+      process(node.children[0])
     else
-      false
+      super
+    end
+  end
+
+  def on_float(node); node; end
+  def on_self(node); node; end
+  def on_complex(node); node; end
+  def on_int(node); node; end
+  def on_sym(node); node; end
+  def on_rational(node); node; end
+  def on_str(node); node; end
+  def on_true(node); node; end
+  def on_false(node); node; end
+  def on___ENCODING__(node); node; end
+  def on_zsuper(node); node; end
+  def on_nil(node); node; end
+
+  # Patched version that allows rewriting
+  # nodes to nils.
+  def process(node)
+    return if node.nil?
+
+    node = node.to_ast
+
+    # Invoke a specific handler
+    on_handler = :"on_#{node.type}"
+    if respond_to? on_handler
+      send on_handler, node
+    else
+      handler_missing(node)
+    end
+  end
+
+  class << self
+    def instance
+      @instance ||= new
     end
   end
 end
-
-AST::Node.prepend(AstNodeExt)

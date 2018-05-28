@@ -423,7 +423,7 @@ module RipperLexer
       if stmts.length == 1
         stmts[0] || s(:begin)
       else
-        s(:begin, *stmts)
+        s(:begin, *stmts.compact)
       end
     end
 
@@ -516,8 +516,6 @@ module RipperLexer
 
       if interpolated
         s(:xstr, *parts)
-      elsif parts.length == 1
-        parts.first.updated(:xstr)
       else
         s(:xstr, *parts)
       end
@@ -934,7 +932,7 @@ module RipperLexer
       when 1
         stmts[0]
       else
-        s(:begin, *stmts)
+        s(:begin, *stmts.compact)
       end
 
       lambda_call = @builder.class.emit_lambda ? s(:lambda) : s(:send, nil, :lambda)
@@ -959,7 +957,7 @@ module RipperLexer
     end
 
     def process_if(cond, then_branch, else_branch)
-      then_branch = s(:begin, *process_many(then_branch))
+      then_branch = s(:begin, *process_many(then_branch).compact)
       else_branch = process(else_branch) if else_branch
       s(:if, process(cond), then_branch, else_branch)
     end
