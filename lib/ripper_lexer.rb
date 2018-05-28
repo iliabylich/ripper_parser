@@ -1077,6 +1077,14 @@ module RipperLexer
       s(:retry)
     end
 
+    def process_BEGIN(stmts)
+      s(:preexe, *process_many(stmts))
+    end
+
+    def process_END(stmts)
+      s(:postexe, *process_many(stmts))
+    end
+
     def s(type, *children)
       @builder.send(:n, type, children, nil)
     end
