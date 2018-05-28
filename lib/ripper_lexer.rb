@@ -290,7 +290,7 @@ module RipperLexer
     def process_def(mid, args, bodystmt)
       mid = process(mid)
       args = process(args)
-      bodystmt = process(bodystmt)
+      bodystmt = process(bodystmt) || s(:begin)
 
       case mid
       when Symbol
@@ -894,7 +894,13 @@ module RipperLexer
     end
 
     def process_do_block(args, stmt)
+      invisible_rest = args && args[1] && args[1][3] && args[1][3] == 0
       args = process(args) || s(:args)
+
+      if args.children.length == 1 && args.children[0].type == :arg && !invisible_rest && @builder.class.emit_procarg0
+        args = s(:args, args.children[0].updated(:procarg0))
+      end
+
       stmt = process(stmt)
       s(:block, args, stmt)
     end

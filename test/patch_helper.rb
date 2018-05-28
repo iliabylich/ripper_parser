@@ -43,13 +43,21 @@ module ParseHelper
 
     # match_current_line constructions, maybe can be fixed
     # without doing scary things on the AST level
+    # But so far it's not worth it.
+    # All such cases are getting parsed as simple regexps.
     %q{if /wat/; end},
     %q{!/wat/},
+    %q{/\xa8/n =~ ""},
 
     # FIXME
     %q{break fun foo do end},
     %q{return fun foo do end},
     %q{next fun foo do end},
+
+    # This syntax was accidentally backported to 2.5 parser.
+    # MRI has it only in 2.6, so ideally it should be removed after
+    # migratinh to 2.6.stable
+    %q{-> do rescue; end}
   ]
 
 
