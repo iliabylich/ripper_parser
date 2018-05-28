@@ -4,8 +4,6 @@ exclude :test_comment_single,      'the whole test is unsupported'
 exclude :test_tokenize,            'the whole test is unsupported'
 exclude :test_tokenize_recover,    'the whole test is unsupported'
 
-exclude :test_bug_def_empty_else, 'simply fails'
-exclude :test_ambiuous_quoted_label_in_ternary_operator, 'simply fails'
 exclude :test_ruby_bug_13547, 'simply fails'
 exclude :test_bug_ascii_8bit_in_literal, 'simply fails'
 exclude :test_bug_480, 'simply fails'

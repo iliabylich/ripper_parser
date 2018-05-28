@@ -150,6 +150,14 @@ class AstMinimizer < Parser::AST::Processor
     end
   end
 
+  def on_str(node)
+    if node.children == ['']
+      node.updated(nil, [])
+    else
+      node
+    end
+  end
+
   def on_xstr(node)
     node = super
     children = node.children
@@ -188,7 +196,6 @@ class AstMinimizer < Parser::AST::Processor
   def on_int(node); node; end
   def on_sym(node); node; end
   def on_rational(node); node; end
-  def on_str(node); node; end
   def on_true(node); node; end
   def on_false(node); node; end
   def on___ENCODING__(node); node; end
