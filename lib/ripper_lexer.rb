@@ -6,7 +6,7 @@ require 'ostruct'
 
 module Parser
   class Ruby251WithRipperLexer
-    attr_reader :diagnostics, :static_env
+    attr_reader :diagnostics, :static_env, :builder
 
     Lexer = OpenStruct.new(cmdarg: [])
 
@@ -290,7 +290,7 @@ module RipperLexer
     def process_def(mid, args, bodystmt)
       mid = process(mid)
       args = process(args)
-      bodystmt = process(bodystmt) || s(:begin)
+      bodystmt = process(bodystmt)
 
       case mid
       when Symbol

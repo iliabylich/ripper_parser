@@ -20,6 +20,12 @@ module ParseHelper
     %Q{p <<~E\n    x\n  \\  y\nE},
     %Q{p <<~E\n    x\n  \\\ty\nE},
 
+    # Ripper is ... weird,
+    # MRI cuts newlines, but ripper doesn't
+    %Q{<<~E\n    1 \\\n    2\n    3\nE\n},
+    %Q{<<-E\n    1 \\\n    2\n    3\nE\n},
+    %Q{p <<~"E"\n  x\\n   y\nE},
+
     # Ripper doesn't distinguish string and symbol arrays
     %q{%i[foo bar]},
     %q{%I[foo #{bar}]},
@@ -56,8 +62,22 @@ module ParseHelper
 
     # This syntax was accidentally backported to 2.5 parser.
     # MRI has it only in 2.6, so ideally it should be removed after
-    # migratinh to 2.6.stable
-    %q{-> do rescue; end}
+    # migrating to 2.6.stable:
+
+    # Lambda do rescue end
+    %q{-> do rescue; end},
+
+    # Class definition in while cond
+    %q{while class Foo; tap do end; end; break; end},
+    %q{while class Foo a = tap do end; end; break; end},
+    %q{while class << self; tap do end; end; break; end},
+    %q{while class << self; a = tap do end; end; break; end},
+
+    # Method definition in while cond
+    %q{while def foo; tap do end; end; break; end},
+    %q{while def self.foo; tap do end; end; break; end},
+    %q{while def foo a = tap do end; end; break; end},
+    %q{while def self.foo a = tap do end; end; break; end}
   ]
 
 
@@ -71,6 +91,10 @@ module ParseHelper
 
   def assert_diagnoses(diagnostic, code, source_maps='', versions=ALL_VERSIONS)
     # we can't emit diagnostics
+  end
+
+  def assert_context(*)
+    # there's no exposable context in the Ripper
   end
 end
 
@@ -108,6 +132,12 @@ module ParserExt
 end
 
 Parser::Ruby25.prepend(ParserExt)
+
+class Minimizer < Parser::AST::Processor
+  def on_begin(node)
+    binding.pry
+  end
+end
 
 module AstNodeExt
   def with_joined_children(new_type)

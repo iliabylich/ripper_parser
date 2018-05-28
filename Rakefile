@@ -2,7 +2,7 @@ require "bundler/gem_tasks"
 require 'rake/testtask'
 
 Rake::TestTask.new do |t|
-  t.ruby_opts  = ["-rpatch_helper"]
+  t.ruby_opts  = ["-rpatch_helper", "-rminitest/excludes"]
   t.libs       = %w(lib/ test/ vendor/parser/test/ vendor/parser/lib/)
   t.test_files = %w(vendor/parser/test/test_parser.rb)
   t.warning    = false
@@ -11,7 +11,7 @@ end
 namespace :ruby_parser do
   desc "'rake generate' in the Ruby Parser"
   task :generate do
-    sh 'cd vendor/parser && rake generate'
+    # sh 'cd vendor/parser && rake generate'
   end
 
   desc "'rake clean' in the Ruby Parser"

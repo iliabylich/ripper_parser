@@ -15,6 +15,8 @@ GEM
     json (2.1.0)
     method_source (0.9.0)
     minitest (5.11.3)
+    minitest-excludes (2.0.1)
+      minitest (~> 5.0)
     parser (2.5.1.0)
       ast (~> 2.4.0)
     pry (0.11.3)
@@ -37,6 +39,7 @@ DEPENDENCIES
   bundler (~> 1.16)
   cliver (~> 0.3.2)
   minitest (~> 5.10)
+  minitest-excludes
   pry
   racc (= 1.4.14)
   rake (~> 10.0)
