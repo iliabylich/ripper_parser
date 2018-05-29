@@ -166,12 +166,20 @@ class AstMinimizer < Parser::AST::Processor
     node = super
     children = node.children
 
+    children = children.select do |child|
+      if child.type == :str && child.children == []
+        nil
+      else
+        child
+      end
+    end
+
     if children.all? { |c| c.is_a?(AST::Node) && c.type == :str }
       content = JOIN_STR_NODES.call(children)
       str = Parser::AST::Node.new(:str, [content])
       node.updated(nil, [str])
     else
-      node
+      node.updated(nil, children)
     end
   end
 

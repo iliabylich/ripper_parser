@@ -10,5 +10,20 @@ require "ripper_lexer"
 # require "pry"
 # Pry.start
 
+def parse(source)
+  parser = Parser::Ruby251WithRipperLexer.new
+  buffer = Parser::Source::Buffer.new('(eval)')
+  buffer.source = source
+  parser.parse(buffer)
+end
+
+def parse_legacy(source)
+  require 'parser/ruby25'
+  parser = Parser::Ruby25.new
+  buffer = Parser::Source::Buffer.new('(eval)')
+  buffer.source = source
+  parser.parse(buffer)
+end
+
 require 'irb'
 IRB.start

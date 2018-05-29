@@ -1,8 +1,7 @@
-require "ripper_lexer/version"
+require 'ripper_lexer/version'
 require 'ripper'
-require 'ast/node'
-require 'pry'
 require 'ostruct'
+require 'parser'
 
 module Parser
   class Ruby251WithRipperLexer
@@ -29,7 +28,8 @@ module Parser
       ripper_ast = Ripper.sexp(source_buffer.source)
       rewriter = RipperLexer::Rewriter.new(
         builder: @builder,
-        file: source_buffer.name
+        file: source_buffer.name,
+        buffer: source_buffer
       )
       rewriter.process(ripper_ast)
     end
@@ -38,9 +38,10 @@ end
 
 module RipperLexer
   class Rewriter
-    def initialize(builder:, file:)
+    def initialize(builder:, file:, buffer:)
       @builder = builder
       @file = file
+      @buffer = buffer
     end
 
     def process(ast)
@@ -520,6 +521,20 @@ module RipperLexer
 
     def process_xstring_literal(parts)
       parts = process_many(parts)
+
+      parts = parts.flat_map do |part|
+        if part.type == :str
+          values = part.children[0].lines
+          values.map.with_index do |value, idx|
+            range = DummyRange.new(value, part.loc.expression.line + idx)
+            map = Parser::Source::Map::Collection.new(nil, nil, range)
+            s(:str, value, map: map)
+          end
+        else
+          part
+        end
+      end
+
       interpolated = parts.any? { |part| part.type != :str }
 
       if interpolated
@@ -540,8 +555,12 @@ module RipperLexer
       s(:regopt, *modifiers)
     end
 
-    define_method('process_@tstring_content') do |value, _location|
-      s(:str, value)
+    DummyRange = Struct.new(:source, :line)
+
+    define_method('process_@tstring_content') do |value, (line, _col)|
+      range = DummyRange.new(value, line)
+      map = Parser::Source::Map::Collection.new(nil, nil, range)
+      s(:str, value, map: map)
     end
 
     def process_string_embexpr((expr))
@@ -716,7 +735,11 @@ module RipperLexer
     end
 
     def process_fcall(ident)
-      s(:send, nil, process(ident))
+      mid = process(ident)
+      if mid.is_a?(AST::Node) && mid.type == :const
+        _, mid = *mid
+      end
+      s(:send, nil, mid)
     end
 
     def process_ifop(cond, then_branch, else_branch)
@@ -1099,8 +1122,8 @@ module RipperLexer
       s(:postexe, *process_many(stmts))
     end
 
-    def s(type, *children)
-      @builder.send(:n, type, children, nil)
+    def s(type, *children, map: nil)
+      @builder.send(:n, type, children, map)
     end
   end
 end
