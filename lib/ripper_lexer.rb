@@ -2,6 +2,7 @@ require 'ripper_lexer/version'
 require 'ripper'
 require 'ostruct'
 require 'parser'
+require 'yaml'
 
 module Parser
   class Ruby251WithRipperLexer
@@ -25,23 +26,46 @@ module Parser
     end
 
     def parse(source_buffer)
-      ripper_ast = Ripper.sexp(source_buffer.source)
+      source = source_buffer.source
+      ast = Ripper.sexp(source)
+      tokens = Ripper.lex(source)
       rewriter = RipperLexer::Rewriter.new(
         builder: @builder,
         file: source_buffer.name,
-        buffer: source_buffer
+        lines: source.lines,
+        tokens: tokens
       )
-      rewriter.process(ripper_ast)
+      rewriter.process(ast)
     end
   end
 end
 
 module RipperLexer
   class Rewriter
-    def initialize(builder:, file:, buffer:)
+    def initialize(builder:, file:, lines:, tokens:)
       @builder = builder
       @file = file
-      @buffer = buffer
+      @lines = lines
+      @tokens = tokens
+
+      filter_tokens
+      build_tokens_map
+    end
+
+    def filter_tokens
+      @tokens.select! do |loc, token_type, _token, _lex_state|
+        token_type == :on_tstring_beg ||
+          token_type == :on_heredoc_beg ||
+          token_type == :on_tstring_content ||
+          token_type == :on_qwords_beg ||
+          token_type == :on_qsymbols_beg
+      end
+    end
+
+    def build_tokens_map
+      @tokens_map = @tokens.map.with_index do |(loc, _, _, _), idx|
+        [loc, idx]
+      end.to_h
     end
 
     def process(ast)
@@ -76,7 +100,7 @@ module RipperLexer
         when :args_add_star
           pre_splat = nodes.shift
           splat = nodes.shift
-          processed += process_many(pre_splat)
+          processed += process_args_sequence(pre_splat) { |non_splat| process(non_splat) }
           processed << s(:splat, process(splat))
         else
           processed << yield(node)
@@ -505,9 +529,77 @@ module RipperLexer
       end
     end
 
+    def _string_content_idx(line, col)
+      key = [line, col]
+      @tokens_map[key]
+    end
+
+    def _str_begin(string_content_idx)
+      @tokens[0...string_content_idx].reverse_each.detect do |_pos, token_type, token, _lex_state|
+        case token_type
+        when :on_tstring_beg
+          break token
+        when :on_heredoc_beg
+          if token.end_with?("'")
+            break "'"
+          else
+            break '"'
+          end
+        else
+          nil
+        end
+      end
+    end
+
+    def _str_end(str_begin)
+      if str_begin == '"' || str_begin == "'"
+        str_begin
+      elsif str_begin.end_with?('[')
+        ']'
+      elsif str_begin.end_with?(')')
+        ')'
+      elsif str_begin.end_with?('{')
+        '}'
+      else
+        raise "Unsupported str_begin #{str_begin}"
+      end
+    end
+
     def process_string_literal(string_content)
       _, *parts = string_content
-      parts = process_many(parts).compact
+
+
+      parts = parts.map do |part|
+        nested = process(part)
+        if nested
+          case nested.type
+          when :str
+            escaped = nested.children[0]
+            next nested unless escaped.include?("\\")
+            line = nested.loc.expression.line
+            col  = nested.loc.expression.col
+            string_content_idx = _string_content_idx(line, col)
+            str_begin = _str_begin(string_content_idx)
+            str_end = _str_end(str_begin)
+            str_end = _str_end(str_begin)
+
+            begin
+              if str_begin == '"'
+                unescaped = (str_begin + escaped + str_end).undump
+              else
+                unescaped = eval(str_begin + escaped + str_end)
+              end
+            rescue Exception
+              require 'pry'; binding.pry
+            end
+
+            nested.updated(nil, [unescaped])
+          else
+            nested
+          end
+        end
+      end
+      parts = parts.compact
       interpolated = parts.any? { |part| part.type != :str }
 
       if interpolated
@@ -555,10 +647,10 @@ module RipperLexer
       s(:regopt, *modifiers)
     end
 
-    DummyRange = Struct.new(:source, :line)
+    DummyRange = Struct.new(:source, :line, :col)
 
-    define_method('process_@tstring_content') do |value, (line, _col)|
-      range = DummyRange.new(value, line)
+    define_method('process_@tstring_content') do |value, (line, col)|
+      range = DummyRange.new(value, line, col)
       map = Parser::Source::Map::Collection.new(nil, nil, range)
       s(:str, value, map: map)
     end
@@ -639,7 +731,17 @@ module RipperLexer
 
     def process_command(mid, args)
       mid = process(mid)
-      args = process(args)
+
+      case mid
+      when Symbol
+        # lowercased method name
+      when ::AST::Node
+        _, mid = *mid
+      else
+        raise "Unsupported mid #{mid}"
+      end
+
+      args = args[0].is_a?(Array) ? [process(args[0])] : process(args)
       s(:send, nil, mid, *args)
     end
 
@@ -666,7 +768,11 @@ module RipperLexer
     end
 
     def process_symbol_literal(inner)
-      s(:sym, process(inner))
+      inner = process(inner)
+      if inner.is_a?(AST::Node) && inner.type == :const
+        _, inner = *inner
+      end
+      s(:sym, inner)
     end
 
     def process_symbol(symbol)

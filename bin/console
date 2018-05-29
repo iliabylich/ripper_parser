@@ -1,14 +1,9 @@
 #!/usr/bin/env ruby
 
-require "bundler/setup"
-require "ripper_lexer"
-
-# You can add fixtures and/or initialization code here to make experimenting
-# with your gem easier. You can also use a different console, if you like.
-
-# (If you use this, don't forget to add pry to your Gemfile!)
-# require "pry"
-# Pry.start
+require 'bundler/setup'
+require 'pry'
+require 'ripper_lexer'
+require 'stackprof'
 
 def parse(source)
   parser = Parser::Ruby251WithRipperLexer.new
@@ -25,5 +20,24 @@ def parse_legacy(source)
   parser.parse(buffer)
 end
 
-require 'irb'
-IRB.start
+GC.disable
+
+if File.exist?('test.rb')
+  source = File.read('test.rb')
+  StackProf.run(mode: :cpu, out: 'latest.dump') do
+    ripper_result = parse(source)
+  end
+
+  parser_result = parse_legacy(source)
+
+  puts 'Ripper:'
+  # p ripper_result
+
+  puts 'Parser:'
+  # p parser_result
+
+  puts 'Same:'
+  # p ripper_result == parser_result
+end
+
+Pry.start

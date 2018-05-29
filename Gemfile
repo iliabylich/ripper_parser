@@ -7,3 +7,4 @@ gemspec
 
 gem 'pry'
 gem 'minitest-excludes'
+gem 'stackprof'
