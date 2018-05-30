@@ -103,7 +103,7 @@ module ParseHelper
 
   def assert_equal(expected, actual, message = 'expected to be equal')
     if expected.is_a?(AST::Node)
-      expected = AstMinimizer.instance.process(expected)
+      expected = RipperLexer::AstMinimizer.instance.process(expected)
     end
 
     if expected.nil?
@@ -126,107 +126,8 @@ module ParserExt
     source_buffer.instance_eval { @source = "nil; begin; #{locals}; end; #{@source}" }
     ast = super
     ast = ast ? Parser::AST::Node.new(:begin, ast.children[2..-1]) : nil
-    AstMinimizer.instance.process(ast)
+    RipperLexer::AstMinimizer.instance.process(ast)
   end
 end
 
 Parser::Ruby25.prepend(ParserExt)
-
-class AstMinimizer < Parser::AST::Processor
-  JOIN_STR_NODES = ->(nodes) { nodes.map { |node| node.children[0] }.join }
-
-  def on_dstr(node)
-    node = super
-    children = node.children
-
-    if children.empty? || children.all?(&:nil?)
-      process node.updated(:str, [])
-    elsif children.all? { |c| c.is_a?(AST::Node) && c.type == :str }
-      process node.updated(:str, [JOIN_STR_NODES.call(children)])
-    else
-      node
-    end
-  end
-
-  def on_str(node)
-    if node.children == ['']
-      node.updated(nil, [])
-    else
-      node
-    end
-  end
-
-  def on_xstr(node)
-    node = super
-    children = node.children
-
-    children = children.select do |child|
-      if child.type == :str && child.children == []
-        nil
-      else
-        child
-      end
-    end
-
-    if children.all? { |c| c.is_a?(AST::Node) && c.type == :str }
-      content = JOIN_STR_NODES.call(children)
-      str = Parser::AST::Node.new(:str, [content])
-      node.updated(nil, [str])
-    else
-      node.updated(nil, children)
-    end
-  end
-
-  def on_begin(node)
-    node = super
-
-    case node.children.length
-    when 0
-      nil
-    when 1
-      process(node.children[0])
-    else
-      node
-    end
-  end
-
-  def on_kwbegin(node)
-    node = on_begin(node)
-    node = node.updated(:begin) if node && node.type == :kwbegin
-    node
-  end
-
-  # We need to have this handlers
-  # to support custom 'process' method
-  # that allows rewriting nodes to nil
-  def on_float(node); node; end
-  def on_self(node); node; end
-  def on_complex(node); node; end
-  def on_int(node); node; end
-  def on_sym(node); node; end
-  def on_rational(node); node; end
-  def on_true(node); node; end
-  def on_false(node); node; end
-  def on___ENCODING__(node); node; end
-  def on_zsuper(node); node; end
-  def on_nil(node); node; end
-  def on___FILE__(node); node; end
-  def on___LINE__(node); node; end
-  def on_cbase(node); node; end
-  def on_regopt(node); node; end
-
-  # Patched version that allows rewriting
-  # nodes to nils.
-  def process(node)
-    return if node.nil?
-    node = node.to_ast
-    on_handler = :"on_#{node.type}"
-    send on_handler, node
-  end
-
-  class << self
-    def instance
-      @instance ||= new
-    end
-  end
-end

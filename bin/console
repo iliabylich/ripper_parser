@@ -5,6 +5,8 @@ require 'pry'
 require 'ripper_lexer'
 require 'stackprof'
 
+Parser::Builders::Default.modernize
+
 def parse(source)
   parser = Parser::Ruby251WithRipperLexer.new
   buffer = Parser::Source::Buffer.new('(eval)')
@@ -17,7 +19,8 @@ def parse_legacy(source)
   parser = Parser::Ruby25.new
   buffer = Parser::Source::Buffer.new('(eval)')
   buffer.source = source
-  parser.parse(buffer)
+  ast = parser.parse(buffer)
+  RipperLexer::AstMinimizer.instance.process(ast)
 end
 
 GC.disable
@@ -31,13 +34,13 @@ if File.exist?('test.rb')
   parser_result = parse_legacy(source)
 
   puts 'Ripper:'
-  # p ripper_result
+  pp ripper_result
 
   puts 'Parser:'
-  # p parser_result
+  p parser_result
 
   puts 'Same:'
-  # p ripper_result == parser_result
+  p ripper_result == parser_result
 end
 
 Pry.start

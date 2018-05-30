@@ -3,6 +3,7 @@ require 'ripper'
 require 'ostruct'
 require 'parser'
 require 'yaml'
+require 'ripper_lexer/ast_minimizer'
 
 module Parser
   class Ruby251WithRipperLexer
@@ -27,223 +28,944 @@ module Parser
 
     def parse(source_buffer)
       source = source_buffer.source
-      ast = Ripper.sexp(source)
-      tokens = Ripper.lex(source)
       rewriter = RipperLexer::Rewriter.new(
         builder: @builder,
         file: source_buffer.name,
-        lines: source.lines,
-        tokens: tokens
+        source: source
       )
-      rewriter.process(ast)
+      ast = rewriter.parse
+      RipperLexer::AstMinimizer.instance.process(ast)
     end
   end
 end
 
 module RipperLexer
-  class Rewriter
-    def initialize(builder:, file:, lines:, tokens:)
+  class Rewriter < ::Ripper::SexpBuilderPP
+    def initialize(builder:, file:, source:)
       @builder = builder
       @file = file
-      @lines = lines
-      @tokens = tokens
-
-      filter_tokens
-      build_tokens_map
+      @escapes = []
+      super(source)
     end
 
-    def filter_tokens
-      @tokens.select! do |loc, token_type, _token, _lex_state|
-        token_type == :on_tstring_beg ||
-          token_type == :on_heredoc_beg ||
-          token_type == :on_tstring_content ||
-          token_type == :on_qwords_beg ||
-          token_type == :on_qsymbols_beg
+    scanner_methods = SCANNER_EVENTS.map{ |m| :"on_#{m}" }
+    (instance_methods.grep(/\Aon_/) - scanner_methods).each do |method_name|
+      define_method method_name do |*args|
+        raise "Missing handler #{method_name} (#{args.length} args)"
       end
     end
 
-    def build_tokens_map
-      @tokens_map = @tokens.map.with_index do |(loc, _, _, _), idx|
-        [loc, idx]
-      end.to_h
+    # === Scanner events ===
+
+    def on_tstring_beg(term)
+      interp = term == '"' || term.start_with?('%Q')
+      @escapes.push(interp)
     end
 
-    def process(ast)
-      return if ast.nil?
-      node, *children = *ast
-      send(:"process_#{node}", *children)
+    def on_tstring_end(term)
+      @escapes.pop
     end
 
-    private
-
-    def process_many(nodes)
-      nodes.map { |node| process(node) }
+    def on_heredoc_beg(term)
+      @escapes.push(!term.end_with?("'"))
     end
 
-    def to_single_node(nodes)
-      case nodes.length
-      when 0
-        nil
-      when 1
-        nodes[0]
+    def on_heredoc_end(term)
+      @escapes.pop
+    end
+
+    def on_qsymbols_beg(term)
+      @escapes.push(false)
+    end
+
+    def on_qsymbols_end(term)
+      @escapes.pop
+    end
+
+    def on_words_beg(term)
+      @escapes.push(true)
+    end
+
+    def on_symbols_beg(term)
+      @escapes.push(true)
+    end
+
+    def on_symbols_end(term)
+      @escapes.pop
+    end
+
+    def on_heredoc_dedent(val, width)
+      val.map! do |e|
+        dedent_string(e, width) if e.is_a?(String)
+        e
+      end
+    end
+
+    def on_backtick(term)
+      @escapes.push(false)
+    end
+
+    # === Parser events ===
+
+    def on_int(v)
+      s(:int, v.to_i)
+    end
+
+    def on_binary(lhs, op, rhs)
+      case op
+      when :and, :'&&'
+        s(:and, lhs, rhs)
+      when :or, :'||'
+        s(:or, lhs, rhs)
       else
-        s(:begin, *nodes)
+        s(:send, lhs, op, rhs)
       end
     end
 
-    def process_args_sequence(nodes)
-      processed = []
+    def on_stmts_new
+      []
+    end
 
-      while nodes && nodes.any? do
-        node = nodes.shift
-        case node
-        when :args_add_star
-          pre_splat = nodes.shift
-          splat = nodes.shift
-          processed += process_args_sequence(pre_splat) { |non_splat| process(non_splat) }
-          processed << s(:splat, process(splat))
+    def on_stmts_add(list, stmt)
+      list.push(stmt)
+    end
+
+    def on_program(stmts)
+      s(:begin, *stmts)
+    end
+
+    def on_tstring_content(str)
+      if @escapes.last
+        if str.ascii_only?
+          str = ('"' + str + '"').undump
         else
-          processed << yield(node)
+          str = str.gsub("\\t", "\t").gsub("\\n", "\n").gsub("\\r", "\r")
         end
       end
 
-      processed
+      str
     end
 
-    def process_program(stmts, *rest)
-      to_single_node(process_many(stmts))
+    def on_string_content
+      []
     end
 
-    def process_void_stmt
+    def on_string_add(strings, str)
+      strings.push(str)
     end
 
-    def process_class(name, superclass, bodystmt)
-      s(:class, process(name), process(superclass), process(bodystmt))
+    def on_string_literal(parts)
+      parts = [''] if parts == []
+      parts.map! { |part| part.is_a?(AST::Node) ? part : s(:str, part) }
+      s(:dstr, *parts)
     end
 
-    def process_const_path_ref(scope, const)
-      s(:const, process(scope), process_const_name(const))
+    def on_string_concat(*strs)
+      s(:dstr, *strs)
     end
 
-    def process_const_ref(ref)
-      process(ref)
+    def on_string_embexpr(exprs)
+      exprs.is_a?(Array) ? s(:begin, *exprs) : exprs
     end
 
-    def process_top_const_ref(ref)
-      _, const_name = *process(ref)
-      s(:const, s(:cbase), const_name)
+    def on_string_dvar(dvar)
+      dvar
     end
 
-    def process_var_ref(ref)
-      case ref[0]
-      when :@ident
-        s(:lvar, process(ref))
-      when :@kw
-        process(ref)
-      when :@ivar
-        process(ref)
-      when :@cvar
-        process(ref)
-      when :@gvar
-        process(ref)
-      when :@const
-        process(ref)
-      else
-        raise "Unsupported var_ref #{ref[0]}"
+    def on_qwords_new
+      []
+    end
+
+    def on_qwords_add(qwords, qword)
+      qwords.push(s(:str, qword))
+    end
+
+    def on_words_add(list, words)
+      dynamic = words.any? { |w| w.is_a?(AST::Node) }
+      words.map! { |w| w.is_a?(AST::Node) ? w : s(:str, w) }
+      word = dynamic ? s(:dstr, *words) : words[0]
+      list.push(word)
+    end
+
+    def on_words_new
+      []
+    end
+
+    def on_word_add(list, word)
+      list.push(word)
+    end
+
+    def on_word_new
+      []
+    end
+
+    def on_symbols_new
+      []
+    end
+
+    def on_symbols_add(list, parts)
+      parts.map! { |part| part.is_a?(AST::Node) ? part : s(:sym, part.to_sym) }
+      list.concat(parts)
+    end
+
+    def on_qsymbols_new
+      []
+    end
+
+    def on_qsymbols_add(list, qsymbol)
+      list.push(s(:sym, qsymbol.to_sym))
+    end
+
+    def on_xstring_new
+      []
+    end
+
+    def on_xstring_add(list, xstring)
+      list.push(xstring)
+    end
+
+    DummyRange = Struct.new(:source, :line, :col)
+
+    def on_xstring_literal(strs)
+      strs.map! do |str|
+        if str.is_a?(AST::Node)
+          str
+        else
+          range = DummyRange.new(str, 0, 0)
+          map = Parser::Source::Map::Collection.new(nil, nil, range)
+          s(:str, str, map: map)
+        end
       end
+
+      s(:xstr, *strs)
     end
 
-    define_method('process_@const') do |const_name, _location|
+    def on_array(items)
+      s(:array, *items)
+    end
+
+    def on_const(const_name)
       s(:const, nil, const_name.to_sym)
     end
 
-    def process_const_name((_, const_name, _location))
-      const_name.to_sym
+    def on_const_ref(ref)
+      ref
     end
 
-    def process_bodystmt(stmts, rescue_handlers, else_node, ensure_body)
-      begin_body = to_single_node(process_many(stmts).compact)
-      begin_body = s(:begin, begin_body) if begin_body && begin_body.type != :begin
-      rescue_handlers = process(rescue_handlers)
-      else_body = process(else_node)
-      else_body = s(:begin, else_body) if else_body
+    def on_void_stmt
+    end
 
-      body = begin_body
+    def to_arg(arg)
+      case arg
+      when Array
+        s(:mlhs, *arg.map { |a| to_arg(a) })
+      when AST::Node
+        arg
+      else
+        s(:arg, arg)
+      end
+    end
 
-      # Special case of
-      # begin; 1; else; 2; end
-      if ensure_body.nil? && rescue_handlers.nil?
-        if body.nil? && else_body.nil?
-          return nil
-        else
-          return s(:begin, *[*body, else_body].compact)
+    def on_excessed_comma(args)
+      args
+    end
+
+    def on_params(req, opt, rest, post, kwargs, kwrest, block)
+      args = []
+
+      if req
+        req.each { |arg| args << to_arg(arg) }
+      end
+
+      if opt
+        opt.each { |arg, default_value| args << s(:optarg, arg, default_value) }
+      end
+
+      if rest
+        args << rest
+      end
+
+      if post
+        post.each { |arg| args << to_arg(arg) }
+      end
+
+      if kwargs
+        kwargs.each do |name, default_value|
+          if default_value
+            args << s(:kwoptarg, name, default_value)
+          else
+            args << s(:kwarg, name)
+          end
         end
       end
 
-      if rescue_handlers.is_a?(Array)
-        body = s(:rescue, body, *rescue_handlers, else_body)
+      if kwrest
+        args << kwrest
+      end
+
+      if block
+        args << block
+      end
+
+      s(:args, *args)
+    end
+
+    def on_paren(stmts)
+      if stmts.is_a?(Array)
+        s(:begin, *stmts.compact)
+      elsif !stmts
+        s(:begin)
+      else
+        stmts
+      end
+    end
+
+    def on_bodystmt(stmts, resbodies, else_body, ensure_body)
+      body = stmts.is_a?(Array) ? s(:begin, *stmts.compact) : stmts
+
+      if resbodies
+        body = s(:rescue, body, *resbodies, else_body)
+      elsif else_body
+        body = s(:begin, *[*body, else_body].compact)
       end
 
       if ensure_body
-        ensure_body = process(ensure_body)
-        ensure_stmts = []
-
-        if body && body.type == :begin
-          ensure_stmts += body.children
-        else
-          ensure_stmts << body
-        end
-
-        if ensure_body && ensure_body.type == :begin
-          ensure_stmts += ensure_body.children
-        else
-          ensure_stmts << ensure_body
-        end
-
-        body = s(:ensure, *ensure_stmts)
+        body = s(:ensure, body, ensure_body)
       end
 
       body
     end
 
-    def process_rescue(klasses, var, stmts, nested)
-      if klasses && klasses[0].is_a?(Array)
-        klasses = process_many(klasses)
+    def on_ident(ident)
+      ident.to_sym
+    end
+
+    def on_def(mid, args, bodystmt)
+      _, mid =  *mid if mid.is_a?(AST::Node)
+      s(:def, mid, args, bodystmt)
+    end
+
+    def on_defs(definee, dot, mid, args, bodystmt)
+      _, mid =  *mid if mid.is_a?(AST::Node)
+      s(:defs, definee, mid, args, bodystmt)
+    end
+
+    def on_mlhs_new
+      []
+    end
+
+    def on_mlhs_add(list, lhs)
+      list.push(lhs)
+    end
+
+    def on_mlhs_add_star(list, splat)
+      splat = splat ? s(:restarg, splat) : s(:restarg)
+      list.push(splat)
+    end
+
+    def on_mlhs_paren(lhses)
+      lhses
+    end
+
+    def on_rest_param(rest)
+      if rest
+        s(:restarg, rest)
       else
-        klasses = process(klasses)
+        s(:restarg)
+      end
+    end
+
+    def on_kwrest_param(kwrest)
+      if kwrest
+        s(:kwrestarg, kwrest)
+      else
+        s(:kwrestarg)
+      end
+    end
+
+    def on_blockarg(block)
+      s(:blockarg, block)
+    end
+
+    def on_label(label)
+      label[0..-2].to_sym
+    end
+
+    def on_var_ref(ref)
+      if ref.is_a?(Symbol)
+        s(:lvar, ref)
+      else
+        ref
+      end
+    end
+
+    def on_var_field(field)
+      case field
+      when Symbol
+        s(:lvar, field)
+      else
+        field
+      end
+    end
+
+    def on_assign(var, value)
+      value = s(:array, *value) if value.is_a?(Array)
+      var = reader_to_writer(var)
+
+      var.updated(nil, [*var, value])
+    end
+
+    def on_kw(keyword)
+      case keyword
+      when 'nil'
+        s(:nil)
+      when 'true'
+        s(:true)
+      when 'false'
+        s(:false)
+      when '__LINE__'
+        if @builder.emit_file_line_as_literals
+          s(:int, lineno)
+        else
+          s(:__LINE__)
+        end
+      when '__FILE__'
+        if @builder.emit_file_line_as_literals
+          s(:str, @file)
+        else
+          s(:__FILE__)
+        end
+      when 'self'
+        s(:self)
+      when '__ENCODING__'
+        if @builder.class.emit_encoding
+          s(:__ENCODING__)
+        else
+          s(:const, s(:const, nil, :Encoding), :UTF_8)
+        end
+      else
+        keyword.to_sym # wtf
+      end
+    end
+
+    def on_begin(inner)
+      if inner.nil?
+        s(:kwbegin)
+      elsif inner.type == :begin
+        inner.updated(:kwbegin)
+      elsif inner.type == :kwbegin
+        inner
+      else
+        s(:kwbegin, inner)
+      end
+    end
+
+    def on_float(value)
+      s(:float, value.to_f)
+    end
+
+    def on_unary(sign, value)
+      case sign
+      when :'-@'
+        if %i[int float].include?(value.type)
+          value.updated(nil, [-value.children[0]])
+        else
+          s(:send, value, :'-@')
+        end
+      when :'+@'
+        if %i[int float].include?(value.type)
+          value.updated(nil, [+value.children[0]])
+        else
+          s(:send, value, :'+@')
+        end
+      when :'~'
+        if %i[int float].include?(value.type)
+          value.updated(nil, [~value.children[0]])
+        else
+          s(:send, value, :'~')
+        end
+      when :'!'
+        s(:send, value, :'!')
+      when :not
+        s(:send, value || s(:begin), :'!')
+      else
+        raise "Unsupported unary sign #{sign}"
+      end
+    end
+
+    def on_rational(value)
+      s(:rational, value.to_r)
+    end
+
+    def on_imaginary(value)
+      if value.end_with?('ri')
+        s(:complex, eval(value))
+      else
+        s(:complex, value.to_c)
+      end
+    end
+
+    def on_ivar(value)
+      s(:ivar, value.to_sym)
+    end
+
+    def on_cvar(value)
+      s(:cvar, value.to_sym)
+    end
+
+    def on_gvar(value)
+      s(:gvar, value.to_sym)
+    end
+
+    def on_CHAR(value)
+      s(:str, value[1])
+    end
+
+    def on_args_new
+      []
+    end
+
+    def on_args_add(list, arg)
+      arg ? list.push(arg) : arg
+    end
+
+    def on_args_add_block(args, block)
+      args.push(s(:block_pass, block)) if block
+      args
+    end
+
+    def on_command(mid, args)
+      s(:send, nil, mid, *args)
+    end
+
+    def on_command_call(recv, dot, mid, args)
+      _, mid = *mid if mid.is_a?(AST::Node)
+      s(dot == :'&.' ? :csend : :send, recv, mid, *args)
+    end
+
+    def on_hash(assoclist)
+      if assoclist.nil?
+        s(:hash)
+      else
+        s(:hash, *assoclist)
+      end
+    end
+
+    def on_assoclist_from_args(assocs)
+      assocs
+    end
+
+    def on_symbol(sym)
+      sym
+    end
+
+    def on_symbol_literal(value)
+      s(:sym, value)
+    end
+
+    def on_dyna_symbol(parts)
+      interpolated = parts.any? { |part| part.is_a?(AST::Node) }
+      parts.map! { |part| part.is_a?(AST::Node) ? part : s(:str, part) }
+
+      if interpolated
+        s(:dsym, *parts)
+      elsif parts.length == 1
+        part = parts.first
+        part.updated(:sym, [part.children[0].to_sym])
+      else
+        s(:dsym, *parts)
+      end
+    end
+
+    def on_regexp_literal(parts, modifiers)
+      parts.map! { |part| part.is_a?(AST::Node) ? part : s(:str, part) }
+      s(:regexp, *parts, modifiers)
+    end
+
+    def on_regexp_new
+      []
+    end
+
+    def on_regexp_add(list, part)
+      list.push(part)
+    end
+
+    def on_regexp_end(value)
+      modifiers = value.chars[1..-1].map(&:to_sym).sort
+      s(:regopt, *modifiers)
+    end
+
+    def on_args_add_star(before, splat_value)
+      before.push(s(:splat, splat_value))
+    end
+
+    def on_assoc_new(key, value)
+      key = s(:sym, key) if key.is_a?(Symbol)
+      s(:pair, key, value)
+    end
+
+    def on_bare_assoc_hash(assocs)
+      s(:hash, *assocs)
+    end
+
+    def on_vcall(mid)
+      return nil if mid.nil?
+      s(:send, nil, mid)
+    end
+
+    def on_ifop(cond, then_branch, else_branch)
+      s(:if, cond, then_branch, else_branch)
+    end
+
+    def on_arg_paren(inner)
+      inner
+    end
+
+    def on_fcall(ident)
+      if ident.is_a?(AST::Node) && ident.type == :const
+        _, ident = *ident
+      end
+      s(:send, nil, ident)
+    end
+
+    def on_method_add_arg(call, args)
+      call.updated(nil, [*call, *args])
+    end
+
+    def on_assoc_splat(value)
+      s(:kwsplat, value)
+    end
+
+    def on_dot2(range_start, range_end)
+      s(:irange, range_start, range_end)
+    end
+
+    def on_dot3(range_start, range_end)
+      s(:erange, range_start, range_end)
+    end
+
+    def on_backref(value)
+      if match = value.match(/\$(\d+)/)
+        s(:nth_ref, match[1].to_i)
+      else
+        s(:back_ref, value.to_sym)
+      end
+    end
+
+    def on_top_const_ref(ref)
+      _, const_name = *ref
+      s(:const, s(:cbase), const_name)
+    end
+
+    def on_const_path_ref(scope, const)
+      _, const_name = *const
+      s(:const, scope, const_name)
+    end
+
+    def on_top_const_field(const)
+      _, const_name = *const
+      s(:const, s(:cbase), const_name)
+    end
+
+    def on_defined(inner)
+      s(:defined?, inner)
+    end
+
+    def on_const_path_field(scope, const)
+      case const
+      when Symbol
+        # method
+        s(:send, scope, const)
+      when ::AST::Node
+        _, const_name = *const
+        s(:const, scope, const_name)
+      else
+        raise "Unsupported const path #{const}"
+      end
+    end
+
+    def on_mrhs_new_from_args(rhses)
+      rhses
+    end
+
+    def on_mrhs_add_star(rhses, splat)
+      rhses.push(s(:splat, splat))
+    end
+
+    def _build_mlhs(lhses)
+      lhses.map! do |lhs|
+        if lhs.is_a?(Array)
+          lhs = s(:mlhs, *_build_mlhs(lhs))
+        else
+          lhs = reader_to_writer(lhs)
+        end
+        lhs
+      end
+    end
+
+    def on_massign(lhses, rhs)
+      mlhs = _build_mlhs(lhses)
+      rhs = s(:array, *rhs) if rhs.is_a?(Array)
+      s(:masgn, s(:mlhs, *lhses), rhs)
+    end
+
+    def on_field(recv, dot, mid)
+      _, mid = *mid if mid.is_a?(AST::Node)
+      s(dot == :'&.' ? :csend : :send, recv, mid)
+    end
+
+    def on_aref(recv, args)
+      if @builder.class.emit_index
+        s(:index, recv, *args)
+      else
+        s(:send, recv, :[], *args)
+      end
+    end
+
+    def on_aref_field(recv, args)
+      if @builder.class.emit_index
+        s(:index, recv, *args)
+      else
+        s(:send, recv, :[], *args)
+      end
+    end
+
+    def on_opassign(recv, op, arg)
+      if recv.type != :send && recv.type != :csend
+        recv = reader_to_writer(recv)
+      end
+      case op
+      when '||='
+        s(:or_asgn, recv, arg)
+      when '&&='
+        s(:and_asgn, recv, arg)
+      else
+        s(:op_asgn, recv, op[0].to_sym, arg)
+      end
+    end
+
+    def on_op(value)
+      value
+    end
+
+    def on_module(const_name, bodystmt)
+      s(:module, const_name, bodystmt)
+    end
+
+    def on_class(const_name, superclass, bodystmt)
+      s(:class, const_name, superclass, bodystmt)
+    end
+
+    def on_sclass(sclass_of, bodystmt)
+      s(:sclass, sclass_of, bodystmt)
+    end
+
+    def on_undef(mids)
+      s(:undef, *mids)
+    end
+
+    def on_alias(old_id, new_id)
+      s(:alias, old_id, new_id)
+    end
+
+    def on_var_alias(old_id, new_id)
+      s(:alias, old_id, new_id)
+    end
+
+    def on_block_var(args, shadow_args)
+      shadow_args = shadow_args ? shadow_args.map { |arg| s(:shadowarg, arg) } : []
+      args.updated(nil, [*args, *shadow_args])
+    end
+
+    def _handle_procarg0(args)
+      arglist = args.children
+
+      if arglist.last == 0
+        invisible_rest = true
+        arglist = arglist[0..-2]
+      else
+        invisible_rest = false
       end
 
-      if klasses.is_a?(Array)
-        klasses = s(:array, *klasses)
+      if arglist.length == 1 && @builder.class.emit_procarg0 && !invisible_rest
+        arg = arglist[0]
+        if arg.type == :arg
+          arglist = [arg.updated(:procarg0)]
+        end
       end
 
-      var = process(var)
+      s(:args, *arglist)
+    end
+
+    def on_brace_block(args, body)
+      body = s(:begin, *body.compact) if body.is_a?(Array)
+      args ||= s(:args)
+
+      args = _handle_procarg0(args)
+
+      s(:block, args, body)
+    end
+
+    def on_method_add_block(method_call, block)
+      block.updated(nil, [method_call, *block])
+    end
+
+    def on_do_block(args, body)
+      body = s(:begin, *body.compact) if body.is_a?(Array)
+      args ||= s(:args)
+
+      args = _handle_procarg0(args)
+
+      s(:block, args, body)
+    end
+
+    def on_call(recv, dot, mid)
+      _, mid = *mid if mid.is_a?(AST::Node)
+      s(dot == :'&.' ? :csend : :send, recv, mid)
+    end
+
+    def on_lambda(args, stmts)
+      body = s(:begin, *stmts.compact)
+      lambda_call = @builder.class.emit_lambda ? s(:lambda) : s(:send, nil, :lambda)
+      s(:block, lambda_call, args, body)
+    end
+
+    def on_super(args)
+      s(:super, *args)
+    end
+
+    def on_zsuper
+      s(:zsuper)
+    end
+
+    def on_yield(args)
+      s(:yield, *args)
+    end
+
+    def on_yield0
+      s(:yield)
+    end
+
+    def on_if(cond, then_branch, else_branch)
+      then_branch = s(:begin, *then_branch.compact) if then_branch.is_a?(Array)
+      else_branch = s(:begin, *else_branch.compact) if else_branch.is_a?(Array)
+      s(:if, cond, then_branch, else_branch)
+    end
+
+    def on_if_mod(cond, then_branch)
+      on_if(cond, then_branch, nil)
+    end
+
+    def on_else(stmts)
+      s(:begin, *stmts.compact)
+    end
+
+    def on_elsif(cond, then_branch, else_branch)
+      on_if(cond, then_branch, else_branch)
+    end
+
+    def on_unless(cond, then_branch, else_branch)
+      on_if(cond, else_branch, then_branch)
+    end
+
+    def on_unless_mod(cond, then_branch)
+      on_if(cond, nil, then_branch)
+    end
+
+    def on_case(cond, whens)
+      s(:case, cond, *whens)
+    end
+
+    def on_when(conds, body, next_whens)
+      body = s(:begin, *body.compact) if body.is_a?(Array)
+      next_whens = [next_whens] unless next_whens.is_a?(Array)
+      [s(:when, *conds, body), *next_whens]
+    end
+
+    def on_while(cond, stmts)
+      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
+      s(:while, cond, stmts)
+    end
+
+    def on_while_mod(cond, stmt)
+      while_type = stmt.type == :kwbegin ? :while_post : :while
+      s(while_type, cond, stmt)
+    end
+
+    def on_until(cond, stmts)
+      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
+      s(:until, cond, stmts)
+    end
+
+    def on_until_mod(cond, stmt)
+      until_type = stmt.type == :kwbegin ? :until_post : :until
+      s(until_type, cond, stmt)
+    end
+
+    def on_for(vars, in_var, stmts)
+      if vars.is_a?(Array)
+        vars = s(:mlhs, *_build_mlhs(vars))
+      else
+        vars = reader_to_writer(vars)
+      end
+
+      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
+
+      s(:for, vars, in_var, stmts)
+    end
+
+    def on_break(args)
+      args ||= []
+      s(:break, *args)
+    end
+
+    def on_return(args)
+      args = s(:begin, *args.compact) if args.is_a?(Array)
+      s(:return, args)
+    end
+
+    def on_return0
+      s(:return)
+    end
+
+    def on_next(args)
+      args = s(:begin, *args.compact) if args.is_a?(Array)
+      s(:next, *args)
+    end
+
+    def on_redo
+      s(:redo)
+    end
+
+    def on_retry
+      s(:retry)
+    end
+
+    def on_BEGIN(stmts)
+      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
+      s(:preexe, stmts)
+    end
+
+    def on_END(stmts)
+      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
+      s(:postexe, stmts)
+    end
+
+    def on_rescue(klasses, var, stmts, nested)
+      klasses = s(:array, *klasses) if klasses.is_a?(Array)
       var = reader_to_writer(var) if var
-      stmts = to_single_node(process_many(stmts))
-
-      nested = process(nested)
+      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
 
       [s(:resbody, klasses, var, stmts), *nested]
     end
 
-    def process_rescue_mod(bodystmt, rescue_handler)
-      bodystmt = process(bodystmt)
-      rescue_handler = process(rescue_handler)
+    def on_rescue_mod(bodystmt, rescue_handler)
       s(:rescue, bodystmt, s(:resbody, nil, nil, rescue_handler), nil)
     end
 
-    def process_ensure(body)
-      to_single_node(process_many(body).compact)
-    end
-
-    # ref = value
-    def process_assign(ref, value)
-      ref = process(ref)
-      value = process(value)
-
-      ref = reader_to_writer(ref)
-
-      ref.updated(nil, [*ref, value])
+    def on_ensure(stmts)
+      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
+      stmts
     end
 
     def reader_to_writer(ref)
@@ -282,950 +1004,7 @@ module RipperLexer
       end
     end
 
-    def process_var_field(field)
-      field = process(field)
-      case field
-      when Symbol
-        s(:lvar, field)
-      else
-        field
-      end
-    end
-
-    define_method('process_@int') do |value, _location|
-      s(:int, value.to_i)
-    end
-
-    define_method('process_@float') do |value, _location|
-      s(:float, value.to_f)
-    end
-
-    define_method('process_@rational') do |value, _location|
-      s(:rational, value.to_r)
-    end
-
-    define_method('process_@imaginary') do |value, _location|
-      if value.end_with?('ri')
-        s(:complex, eval(value)) # TODO: rare case, but probably deserves some optimization
-      else
-        s(:complex, value.to_c)
-      end
-    end
-
-    def process_def(mid, args, bodystmt)
-      mid = process(mid)
-      args = process(args)
-      bodystmt = process(bodystmt)
-
-      case mid
-      when Symbol
-        # lowercased method name
-      when AST::Node
-        # Upcased method name
-        _, mid = *mid
-      end
-
-      s(:def, mid, args, bodystmt)
-    end
-
-    def process_defs(definee, dot, mid, args, bodystmt)
-      definee = process(definee)
-      mid = process(mid)
-      args = process(args)
-      bodystmt = process(bodystmt)
-
-      case mid
-      when Symbol
-        # lowercased method name
-      when AST::Node
-        # Upcased method name
-        _, mid = *mid
-      end
-
-      s(:defs, definee, mid, args, bodystmt)
-    end
-
-    define_method('process_@ident') do |name, _location|
-      name.to_sym
-    end
-
-    def process_params(req, opt, rest, post, kwargs, kwrest, block)
-      args = []
-
-      if req
-        args += req.map { |arg| process_arg(arg) }
-      end
-
-      if opt
-        args += opt.map { |arg| process_optarg(*arg) }
-      end
-
-      if !rest.nil? && rest != 0
-        args << process(rest)
-      end
-
-      if post
-        args += post.map { |arg| process_arg(arg) }
-      end
-
-      if kwargs
-        args += kwargs.map { |arg| process_kwarg(arg) }
-      end
-
-      if kwrest
-        args << process(kwrest)
-      end
-
-      if block
-        args << process(block)
-      end
-
-      s(:args, *args)
-    end
-
-    def process_arg(arg)
-      type, *rest = *arg
-      case type
-      when :@ident
-        s(:arg, process(arg))
-      when :mlhs
-        rest = rest.map { |a| process_arg(a) }
-        s(:mlhs, *rest)
-      when :rest_param
-        process(arg)
-      else
-        raise "Unknown arg type #{type}"
-      end
-    end
-
-    def process_optarg(name, value)
-      s(:optarg, process(name), process(value))
-    end
-
-    def process_rest_param(name)
-      if name
-        s(:restarg, process(name))
-      else
-        s(:restarg)
-      end
-    end
-
-    def process_kwarg(kwarg)
-      name, default_value = kwarg
-      name = process(name)
-      if default_value == false
-        s(:kwarg, name)
-      else
-        s(:kwoptarg, name, process(default_value))
-      end
-    end
-
-    define_method('process_@label') do |value, location|
-      value[0..-2].to_sym
-    end
-
-    def process_kwrest_param(name)
-      if name
-        s(:kwrestarg, process(name))
-      else
-        s(:kwrestarg)
-      end
-    end
-
-    def process_blockarg(name)
-      s(:blockarg, process(name))
-    end
-
-    def process_paren(stmts)
-      return s(:begin) unless stmts.is_a?(Array)
-
-      if stmts[0].is_a?(Symbol)
-        stmts = [process(stmts)]
-      else
-        stmts = process_many(stmts)
-      end
-
-      if stmts.length == 1
-        stmts[0] || s(:begin)
-      else
-        s(:begin, *stmts.compact)
-      end
-    end
-
-    define_method('process_@kw') do |keyword, location|
-      case keyword
-      when 'nil'
-        s(:nil)
-      when 'true'
-        s(:true)
-      when 'false'
-        s(:false)
-      when '__LINE__'
-        if @builder.emit_file_line_as_literals
-          line, _col = location
-          s(:int, line)
-        else
-          s(:__LINE__)
-        end
-      when '__FILE__'
-        if @builder.emit_file_line_as_literals
-          s(:str, @file)
-        else
-          s(:__FILE__)
-        end
-      when 'self'
-        s(:self)
-      when '__ENCODING__'
-        if @builder.class.emit_encoding
-          s(:__ENCODING__)
-        else
-          s(:const, s(:const, nil, :Encoding), :UTF_8)
-        end
-      else
-        keyword.to_sym # wtf
-      end
-    end
-
-    def process_begin(bodystmt)
-      bodystmt = process(bodystmt)
-      if bodystmt.nil?
-        s(:kwbegin)
-      elsif bodystmt.type == :begin
-        bodystmt.updated(:kwbegin)
-      elsif bodystmt.type == :kwbegin
-        bodystmt
-      else
-        s(:kwbegin, bodystmt)
-      end
-    end
-
-    def process_unary(sign, value)
-      value = process(value)
-      case sign
-      when :'-@'
-        if %i[int float].include?(value.type)
-          value.updated(nil, [-value.children[0]])
-        else
-          s(:send, value, :'-@')
-        end
-      when :'+@'
-        if %i[int float].include?(value.type)
-          value.updated(nil, [+value.children[0]])
-        else
-          s(:send, value, :'+@')
-        end
-      when :'~'
-        if %i[int float].include?(value.type)
-          value.updated(nil, [~value.children[0]])
-        else
-          s(:send, value, :'~')
-        end
-      when :'!'
-        s(:send, value, :'!')
-      when :not
-        s(:send, value || s(:begin), :'!')
-      else
-        raise "Unsupported unary sign #{sign}"
-      end
-    end
-
-    def _string_content_idx(line, col)
-      key = [line, col]
-      @tokens_map[key]
-    end
-
-    def _str_begin(string_content_idx)
-      @tokens[0...string_content_idx].reverse_each.detect do |_pos, token_type, token, _lex_state|
-        case token_type
-        when :on_tstring_beg
-          break token
-        when :on_heredoc_beg
-          if token.end_with?("'")
-            break "'"
-          else
-            break '"'
-          end
-        else
-          nil
-        end
-      end
-    end
-
-    def _str_end(str_begin)
-      if str_begin == '"' || str_begin == "'"
-        str_begin
-      elsif str_begin.end_with?('[')
-        ']'
-      elsif str_begin.end_with?(')')
-        ')'
-      elsif str_begin.end_with?('{')
-        '}'
-      else
-        raise "Unsupported str_begin #{str_begin}"
-      end
-    end
-
-    def process_string_literal(string_content)
-      _, *parts = string_content
-
-
-      parts = parts.map do |part|
-        nested = process(part)
-        if nested
-          case nested.type
-          when :str
-            escaped = nested.children[0]
-            next nested unless escaped.include?("\\")
-            line = nested.loc.expression.line
-            col  = nested.loc.expression.col
-            string_content_idx = _string_content_idx(line, col)
-            str_begin = _str_begin(string_content_idx)
-            str_end = _str_end(str_begin)
-            str_end = _str_end(str_begin)
-
-            begin
-              if str_begin == '"'
-                unescaped = (str_begin + escaped + str_end).undump
-              else
-                unescaped = eval(str_begin + escaped + str_end)
-              end
-            rescue Exception
-              require 'pry'; binding.pry
-            end
-
-            nested.updated(nil, [unescaped])
-          else
-            nested
-          end
-        end
-      end
-      parts = parts.compact
-      interpolated = parts.any? { |part| part.type != :str }
-
-      if interpolated
-        s(:dstr, *parts)
-      elsif parts.length == 1
-        parts.first
-      else
-        s(:dstr, *parts)
-      end
-    end
-
-    def process_xstring_literal(parts)
-      parts = process_many(parts)
-
-      parts = parts.flat_map do |part|
-        if part.type == :str
-          values = part.children[0].lines
-          values.map.with_index do |value, idx|
-            range = DummyRange.new(value, part.loc.expression.line + idx)
-            map = Parser::Source::Map::Collection.new(nil, nil, range)
-            s(:str, value, map: map)
-          end
-        else
-          part
-        end
-      end
-
-      interpolated = parts.any? { |part| part.type != :str }
-
-      if interpolated
-        s(:xstr, *parts)
-      else
-        s(:xstr, *parts)
-      end
-    end
-
-    def process_regexp_literal(parts, modifiers)
-      parts = process_many(parts)
-      modifiers = process(modifiers)
-      s(:regexp, *parts, modifiers)
-    end
-
-    define_method('process_@regexp_end') do |value, _location|
-      modifiers = value.chars[1..-1].map(&:to_sym).sort
-      s(:regopt, *modifiers)
-    end
-
-    DummyRange = Struct.new(:source, :line, :col)
-
-    define_method('process_@tstring_content') do |value, (line, col)|
-      range = DummyRange.new(value, line, col)
-      map = Parser::Source::Map::Collection.new(nil, nil, range)
-      s(:str, value, map: map)
-    end
-
-    def process_string_embexpr((expr))
-      expr = process(expr)
-      if expr && expr.type != :begin
-        expr = s(:begin, expr)
-      end
-      expr
-    end
-
-    def process_string_dvar(value)
-      process(value)
-    end
-
-    define_method('process_@ivar') do |value, _location|
-      s(:ivar, value.to_sym)
-    end
-
-    define_method('process_@cvar') do |value, _location|
-      s(:cvar, value.to_sym)
-    end
-
-    define_method('process_@gvar') do |value, _location|
-      s(:gvar, value.to_sym)
-    end
-
-    def process_string_concat(*strings)
-      strings = process_many(strings)
-      s(:dstr, *strings)
-    end
-
-    define_method('process_@CHAR') do |value, _location|
-      s(:str, value[1])
-    end
-
-    def process_method_add_arg(call, args)
-      send = process(call)
-      args = args.empty? ? s(:args) : process(args)
-      send.updated(nil, [*send, *args])
-    end
-
-    def process_call(recv, dot, mid)
-      recv = process(recv)
-      mid = mid.is_a?(Symbol) ? mid : process(mid)
-      case mid
-      when Symbol
-        # lowercased method name
-      when ::AST::Node
-        _, mid = *mid
-      else
-        raise "Unsupported mid #{mid}"
-      end
-
-      s(dot == :'&.' ? :csend : :send, recv, mid)
-    end
-
-    def process_arg_paren(inner)
-      if inner.nil?
-        nil
-      elsif inner[0].is_a?(Array)
-        process_many(inner)
-      else
-        process(inner)
-      end
-    end
-
-    def process_args_add_block(parts, block)
-      args = process_args_sequence(parts) { |non_splat| process(non_splat) }
-
-      if block
-        args << s(:block_pass, process(block))
-      end
-
-      args
-    end
-
-    def process_command(mid, args)
-      mid = process(mid)
-
-      case mid
-      when Symbol
-        # lowercased method name
-      when ::AST::Node
-        _, mid = *mid
-      else
-        raise "Unsupported mid #{mid}"
-      end
-
-      args = args[0].is_a?(Array) ? [process(args[0])] : process(args)
-      s(:send, nil, mid, *args)
-    end
-
-    def process_command_call(recv, dot, mid, args)
-      recv = process(recv)
-      mid = process(mid)
-      args = process(args)
-
-      case mid
-      when Symbol
-        # lowercased method name
-      when ::AST::Node
-        _, mid = *mid
-      else
-        raise "Unsupported mid #{mid}"
-      end
-
-      s(dot == :'&.' ? :csend : :send, recv, mid, *args)
-    end
-
-    def process_vcall(mid = nil)
-      return nil if mid.nil?
-      s(:send, nil, process(mid))
-    end
-
-    def process_symbol_literal(inner)
-      inner = process(inner)
-      if inner.is_a?(AST::Node) && inner.type == :const
-        _, inner = *inner
-      end
-      s(:sym, inner)
-    end
-
-    def process_symbol(symbol)
-      process(symbol)
-    end
-
-    def process_dyna_symbol(parts)
-      parts = process_many(parts).compact
-      interpolated = parts.any? { |part| part.type != :str }
-
-      if interpolated
-        s(:dsym, *parts)
-      elsif parts.length == 1
-        part = parts.first
-        part.updated(:sym, [part.children[0].to_sym])
-      else
-        s(:dsym, *parts)
-      end
-    end
-
-    def process_array(parts)
-      processed = process_args_sequence(parts) do |non_splat|
-        if non_splat[0].is_a?(Symbol)
-          process(non_splat)
-        elsif non_splat.is_a?(Array)
-          if non_splat.length == 1 && non_splat[0][0] == :@tstring_content
-            process(non_splat[0])
-          else
-            s(:dstr, *process_many(non_splat))
-          end
-        end
-      end
-
-      s(:array, *processed)
-    end
-
-    def process_bare_assoc_hash(assocs)
-      pairs = process_many(assocs)
-      s(:hash, *pairs)
-    end
-
-    def process_hash(assoclist)
-      if assoclist.nil?
-        s(:hash)
-      else
-        s(:hash, *process(assoclist))
-      end
-    end
-
-    def process_assoclist_from_args(assocs)
-      process_many(assocs)
-    end
-
-    def process_assoc_new(key, value)
-      key = process(key)
-      key = s(:sym, key) if key.is_a?(Symbol) # label
-      s(:pair, key, process(value))
-    end
-
-    def process_assoc_splat(value)
-      s(:kwsplat, process(value))
-    end
-
-    def process_string_content
-      # no-op
-    end
-
-    def process_fcall(ident)
-      mid = process(ident)
-      if mid.is_a?(AST::Node) && mid.type == :const
-        _, mid = *mid
-      end
-      s(:send, nil, mid)
-    end
-
-    def process_ifop(cond, then_branch, else_branch)
-      s(:if,
-        process(cond),
-        process(then_branch),
-        process(else_branch))
-    end
-
-    def process_dot2(range_start, range_end)
-      s(:irange, process(range_start), process(range_end))
-    end
-
-    def process_dot3(range_start, range_end)
-      s(:erange, process(range_start), process(range_end))
-    end
-
-    define_method('process_@backref') do |value, _location|
-      if match = value.match(/\$(\d+)/)
-        s(:nth_ref, match[1].to_i)
-      else
-        s(:back_ref, value.to_sym)
-      end
-    end
-
-    def process_defined(inner)
-      s(:defined?, process(inner))
-    end
-
-    def process_const_path_field(scope, const)
-      scope = process(scope)
-      const = process(const)
-      case const
-      when Symbol
-        # method
-        s(:send, scope, const)
-      when ::AST::Node
-        _, const_name = *const
-        s(:const, scope, const_name)
-      else
-        raise "Unsupported const path #{const}"
-      end
-    end
-
-    def process_top_const_field(const)
-      _, const_name = *process(const)
-      s(:const, s(:cbase), const_name)
-    end
-
-    def process_massign(mlhs, mrhs)
-      if mlhs[0] == :mlhs
-        # a single top-level mlhs
-        _, *mlhs = *mlhs
-      end
-
-      mlhs = s(:mlhs, *process_mlhs(*mlhs))
-      mlhs = reader_to_writer(mlhs)
-
-      mrhs = process(mrhs)
-
-      s(:masgn, mlhs, mrhs)
-    end
-
-    def process_mlhs(*mlhs)
-      mlhs = process_many(mlhs).compact
-      mlhs.any? ? s(:mlhs, *mlhs) : nil
-    end
-
-    def process_mrhs_new_from_args(first, last = nil)
-      process_array([*first, last])
-    end
-
-    def process_mrhs_add_star(before, rest)
-      if before && !before.empty?
-        before = process(before)
-      else
-        before = []
-      end
-      s(:array, *before, s(:splat, process(rest)))
-    end
-
-    def process_field(recv, dot, mid)
-      recv = process(recv)
-      mid = process(mid)
-      case mid
-      when Symbol
-        # method
-      when AST::Node
-        _, mid = *mid
-      else
-        raise "Unsupported field #{mid}"
-      end
-
-      s(dot == :'&.' ? :csend : :send, recv, mid)
-    end
-
-    def process_aref(recv, args)
-      recv = process(recv)
-      if args.nil?
-        args = []
-      elsif args[0].is_a?(Array)
-        args = process_many(args)
-      else
-        args = process(args)
-      end
-
-      if @builder.class.emit_index
-        s(:index, recv, *args)
-      else
-        s(:send, recv, :[], *args)
-      end
-    end
-
-    def process_aref_field(recv, args)
-      recv = process(recv)
-      args = process(args)
-      if @builder.class.emit_index
-        s(:index, recv, *args)
-      else
-        s(:send, recv, :[], *args)
-      end
-    end
-
-    def process_opassign(recv, op, arg)
-      recv = process(recv)
-      if recv.type != :send && recv.type != :csend
-        recv = reader_to_writer(recv)
-      end
-      op = process(op)
-      arg = process(arg)
-      case op
-      when '||='
-        s(:or_asgn, recv, arg)
-      when '&&='
-        s(:and_asgn, recv, arg)
-      else
-        s(:op_asgn, recv, op[0].to_sym, arg)
-      end
-    end
-
-    define_method('process_@op') do |value, _location|
-      value
-    end
-
-    def process_module(const_name, bodystmt)
-      s(:module, process(const_name), process(bodystmt))
-    end
-
-    def process_sclass(sclass_of, bodystmt)
-      s(:sclass, process(sclass_of), process(bodystmt))
-    end
-
-    def process_undef(mids)
-      mids = process_many(mids)
-      s(:undef, *mids)
-    end
-
-    def process_alias(old_id, new_id)
-      s(:alias, process(old_id), process(new_id))
-    end
-
-    def process_var_alias(old_id, new_id)
-      s(:alias, process(old_id), process(new_id))
-    end
-
-    def process_method_add_block(method_call, block)
-      method_call = process(method_call)
-      block = process(block)
-      block.updated(nil, [method_call, *block])
-    end
-
-    def process_brace_block(args, stmts)
-      invisible_rest = args && args[1] && args[1][3] && args[1][3] == 0
-      args = process(args) || s(:args)
-
-      if args.children.length == 1 && args.children[0].type == :arg && !invisible_rest && @builder.class.emit_procarg0
-        args = s(:args, args.children[0].updated(:procarg0))
-      end
-
-      body = to_single_node(process_many(stmts))
-
-      s(:block, args, body)
-    end
-
-    def process_do_block(args, stmt)
-      invisible_rest = args && args[1] && args[1][3] && args[1][3] == 0
-      args = process(args) || s(:args)
-
-      if args.children.length == 1 && args.children[0].type == :arg && !invisible_rest && @builder.class.emit_procarg0
-        args = s(:args, args.children[0].updated(:procarg0))
-      end
-
-      stmt = process(stmt)
-      s(:block, args, stmt)
-    end
-
-    def process_block_var(args, shadow_args)
-      args = process(args)
-      shadow_args = shadow_args ? shadow_args.map { |arg| s(:shadowarg, process(arg)) } : []
-      args.updated(nil, [*args, *shadow_args])
-    end
-
-    def process_binary(lhs, op, rhs)
-      lhs = process(lhs)
-      rhs = process(rhs)
-
-      case op
-      when :and, :'&&'
-        s(:and, lhs, rhs)
-      when :or, :'||'
-        s(:or, lhs, rhs)
-      else
-        s(:send, lhs, op, rhs)
-      end
-    end
-
-    def process_lambda(args, stmts)
-      args = process(args) || s(:args)
-      stmts = process_many(stmts)
-      body = case stmts.length
-      when 0
-        nil
-      when 1
-        stmts[0]
-      else
-        s(:begin, *stmts.compact)
-      end
-
-      lambda_call = @builder.class.emit_lambda ? s(:lambda) : s(:send, nil, :lambda)
-
-      s(:block, lambda_call, args, body)
-    end
-
-    def process_super(args)
-      s(:super, *process(args))
-    end
-
-    def process_zsuper
-      s(:zsuper)
-    end
-
-    def process_yield(args)
-      s(:yield, *process(args))
-    end
-
-    def process_yield0
-      s(:yield)
-    end
-
-    def process_if(cond, then_branch, else_branch)
-      then_branch = s(:begin, *process_many(then_branch).compact)
-      else_branch = process(else_branch) if else_branch
-      s(:if, process(cond), then_branch, else_branch)
-    end
-
-    def process_if_mod(cond, then_branch)
-      s(:if, process(cond), process(then_branch), nil)
-    end
-
-    def process_else(stmts)
-      to_single_node(process_many(stmts).compact)
-    end
-
-    def process_elsif(cond, then_branch, else_branch)
-      process_if(cond, then_branch, else_branch)
-    end
-
-    def process_unless(cond, then_branch, else_branch)
-      then_branch = s(:begin, *process_many(then_branch))
-      else_branch = process(else_branch) if else_branch
-      s(:if, process(cond), else_branch, then_branch)
-    end
-
-    def process_unless_mod(cond, then_branch)
-      s(:if, process(cond), nil, process(then_branch))
-    end
-
-    def process_case(cond, whens_tree)
-      whens = []
-
-      while whens_tree do
-        whens << whens_tree.shift(3)
-        whens_tree = whens_tree[0]
-      end
-
-      if whens.last[0] != :else
-        whens << [:else, []]
-      end
-
-      s(:case, process(cond), *process_many(whens))
-    end
-
-    def process_when(conds, stmts)
-      conds = process_args_sequence(conds) { |non_splat| process(non_splat) }
-      stmt = to_single_node(process_many(stmts))
-      s(:when, *conds, stmt)
-    end
-
-    def process_while(cond, stmts)
-      s(:while, process(cond), to_single_node(process_many(stmts)))
-    end
-
-    def process_while_mod(cond, stmt)
-      stmt = process(stmt)
-      while_type = stmt.type == :kwbegin ? :while_post : :while
-      s(while_type, process(cond), stmt)
-    end
-
-    def process_until(cond, stmts)
-      s(:until, process(cond), to_single_node(process_many(stmts)))
-    end
-
-    def process_until_mod(cond, stmt)
-      stmt = process(stmt)
-      until_type = stmt.type == :kwbegin ? :until_post : :until
-      s(until_type, process(cond), stmt)
-    end
-
-    def process_for(vars, in_var, stmts)
-      if vars[0].is_a?(Array)
-        vars = s(:mlhs, *process_many(vars))
-      else
-        vars = process(vars)
-      end
-
-      in_var = process(in_var)
-      stmts = to_single_node(process_many(stmts).compact)
-
-      s(:for, reader_to_writer(vars), in_var, stmts)
-    end
-
-    def process_break(args)
-      if args.nil? || args.empty?
-        args = []
-      elsif args[0].is_a?(Array)
-        args = process_many(args)
-      else
-        args = process(args)
-      end
-      s(:break, *args)
-    end
-
-    def process_return(value)
-      if value[0].is_a?(Array)
-        value = to_single_node(process_many(value))
-      else
-        value = s(:begin, *process(value))
-      end
-
-      s(:return, value)
-    end
-
-    def process_return0
-      s(:return)
-    end
-
-    def process_next(value)
-      if value.empty?
-        s(:next)
-      elsif value[0].is_a?(Array)
-        s(:next, to_single_node(process_many(value)))
-      else
-        s(:next, s(:begin, *process(value)))
-      end
-    end
-
-    def process_redo
-      s(:redo)
-    end
-
-    def process_retry
-      s(:retry)
-    end
-
-    def process_BEGIN(stmts)
-      s(:preexe, *process_many(stmts))
-    end
-
-    def process_END(stmts)
-      s(:postexe, *process_many(stmts))
+    def on_magic_comment(_, _)
     end
 
     def s(type, *children, map: nil)
