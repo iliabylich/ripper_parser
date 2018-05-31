@@ -100,11 +100,37 @@ module ParseHelper
   def assert_context(*)
     # there's no exposable context in the Ripper
   end
+
+  def assert_equal(expected, actual, message = 'expected to be equal')
+    if expected.is_a?(AST::Node)
+      expected = DstrRewriter.new.process(expected)
+    end
+
+    super(actual, expected, message)
+  end
 end
 
 module Parser
   remove_const(:Ruby25)
   Ruby25 = Ruby251WithRipperLexer
+end
+
+class DstrRewriter < Parser::AST::Processor
+  # That's the only incostistence in the AST format
+  # that most probably can't be easily fixed.
+  #
+  # The following heredoc:
+  # <<-HERE
+  # HERE
+  #
+  # gets parsed as
+  # - s(:dstr) by the Parser
+  # - s(:str, '') by the RipperParser
+  def on_dstr(node)
+    if node.children.length == 0
+      node.updated(:str, [''])
+    end
+  end
 end
 
 module ParserExt

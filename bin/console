@@ -19,14 +19,15 @@ def parse_legacy(source)
   parser = Parser::Ruby25.new
   buffer = Parser::Source::Buffer.new('(eval)')
   buffer.source = source
-  ast = parser.parse(buffer)
-  RipperLexer::AstMinimizer.instance.process(ast)
+  parser.parse(buffer)
 end
 
 GC.disable
 
 if File.exist?('test.rb')
   source = File.read('test.rb')
+  ripper_result = nil
+
   StackProf.run(mode: :cpu, out: 'latest.dump') do
     ripper_result = parse(source)
   end

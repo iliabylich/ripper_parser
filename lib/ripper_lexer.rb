@@ -44,6 +44,7 @@ module RipperLexer
       @builder = builder
       @file = file
       @escapes = []
+      @heredocs = []
       super(source)
     end
 
@@ -59,38 +60,47 @@ module RipperLexer
     def on_tstring_beg(term)
       interp = term == '"' || term.start_with?('%Q')
       @escapes.push(interp)
+      @heredocs.push(false)
     end
 
     def on_tstring_end(term)
       @escapes.pop
+      @heredocs.pop
     end
 
     def on_heredoc_beg(term)
       @escapes.push(!term.end_with?("'"))
+      @heredocs.push(true)
     end
 
     def on_heredoc_end(term)
       @escapes.pop
+      @heredocs.pop
     end
 
     def on_qsymbols_beg(term)
       @escapes.push(false)
+      @heredocs.push(false)
     end
 
     def on_qsymbols_end(term)
       @escapes.pop
+      @heredocs.pop
     end
 
     def on_words_beg(term)
       @escapes.push(true)
+      @heredocs.push(false)
     end
 
     def on_symbols_beg(term)
       @escapes.push(true)
+      @heredocs.push(false)
     end
 
     def on_symbols_end(term)
       @escapes.pop
+      @heredocs.pop
     end
 
     def on_heredoc_dedent(val, width)
@@ -102,6 +112,7 @@ module RipperLexer
 
     def on_backtick(term)
       @escapes.push(false)
+      @heredocs.push(false)
     end
 
     # === Parser events ===
@@ -113,7 +124,7 @@ module RipperLexer
         stmts.compact!
         case stmts.length
         when 0
-          return nil
+          nil
         when 1
           stmts[0]
         else
@@ -121,8 +132,6 @@ module RipperLexer
         end
       elsif stmts.nil?
         nil
-      else
-        binding.pry
       end
     end
 
@@ -158,7 +167,7 @@ module RipperLexer
         if str.ascii_only?
           str = ('"' + str + '"').undump
         else
-          str = str.gsub("\\t", "\t").gsub("\\n", "\n").gsub("\\r", "\r")
+          str = str.gsub("\\t", "\t").gsub("\\n", "\n").gsub("\\r", "\r").gsub("\\s", "\s")
         end
       end
 
@@ -175,6 +184,14 @@ module RipperLexer
 
     def on_string_literal(parts)
       parts = [''] if parts == []
+
+      parts = parts.flat_map do |part|
+        if part.is_a?(String)
+          part == '' ? '' : part.lines
+        else
+          part
+        end
+      end
 
       if parts.length == 1 && parts[0].is_a?(String)
         return s(:str, parts[0])
@@ -250,18 +267,26 @@ module RipperLexer
 
     DummyRange = Struct.new(:source, :line, :col)
 
-    def on_xstring_literal(strs)
-      strs.map! do |str|
-        if str.is_a?(AST::Node)
-          str
+    def on_xstring_literal(parts)
+      parts = parts.flat_map do |part|
+        if part.is_a?(String)
+          part == '' ? '' : part.lines
         else
-          range = DummyRange.new(str, 0, 0)
-          map = Parser::Source::Map::Collection.new(nil, nil, range)
-          s(:str, str, map: map)
+          part
         end
       end
 
-      s(:xstr, *strs)
+      parts.map! do |part|
+        if part.is_a?(AST::Node)
+          part
+        else
+          range = DummyRange.new(part, 0, 0)
+          map = Parser::Source::Map::Collection.new(nil, nil, range)
+          s(:str, part, map: map)
+        end
+      end
+
+      s(:xstr, *parts)
     end
 
     def on_array(items)
@@ -282,7 +307,8 @@ module RipperLexer
     def to_arg(arg)
       case arg
       when Array
-        s(:mlhs, *arg.map { |a| to_arg(a) })
+        arg.map! { |a| to_arg(a) }
+        s(:mlhs, *arg)
       when AST::Node
         arg
       else
@@ -392,11 +418,17 @@ module RipperLexer
       ident.to_sym
     end
 
-    def on_def(mid, args, bodystmt)
-      _, mid =  *mid if mid.is_a?(AST::Node)
+    def _unwrap_args(args)
       if args && args.type == :begin && args.children.length == 1
         args = args.children[0]
+      else
+        args
       end
+    end
+
+    def on_def(mid, args, bodystmt)
+      _, mid =  *mid if mid.is_a?(AST::Node)
+      args = _unwrap_args(args)
       s(:def, mid, args, bodystmt)
     end
 
@@ -405,6 +437,7 @@ module RipperLexer
       if definee.type == :begin && definee.children.length == 1
         definee = definee.children[0]
       end
+      args = _unwrap_args(args)
       s(:defs, definee, mid, args, bodystmt)
     end
 
@@ -833,7 +866,8 @@ module RipperLexer
     end
 
     def on_block_var(args, shadow_args)
-      shadow_args = shadow_args ? shadow_args.map { |arg| s(:shadowarg, arg) } : []
+      shadow_args ||= []
+      shadow_args.map! { |arg| s(:shadowarg, arg) }
       args.updated(nil, [*args, *shadow_args])
     end
 
@@ -847,7 +881,7 @@ module RipperLexer
         invisible_rest = false
       end
 
-      if arglist.length == 1 && @builder.class.emit_procarg0 && !invisible_rest
+      if @builder.class.emit_procarg0 && arglist.length == 1 && !invisible_rest
         arg = arglist[0]
         if arg.type == :arg
           arglist = [arg.updated(:procarg0)]
