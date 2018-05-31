@@ -8,3 +8,5 @@ gemspec
 gem 'pry'
 gem 'minitest-excludes'
 gem 'stackprof'
+gem 'benchmark-ips'
+gem 'c_lexer'
