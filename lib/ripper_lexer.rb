@@ -3,7 +3,7 @@ require 'ripper'
 require 'ostruct'
 require 'parser'
 require 'yaml'
-require 'ripper_lexer/ast_minimizer'
+require 'pry'
 
 module Parser
   class Ruby251WithRipperLexer
@@ -33,8 +33,7 @@ module Parser
         file: source_buffer.name,
         source: source
       )
-      ast = rewriter.parse
-      RipperLexer::AstMinimizer.instance.process(ast)
+      rewriter.parse
     end
   end
 end
@@ -107,6 +106,26 @@ module RipperLexer
 
     # === Parser events ===
 
+    def begin_node(stmts)
+      if stmts.is_a?(AST::Node)
+        stmts
+      elsif stmts.is_a?(Array)
+        stmts.compact!
+        case stmts.length
+        when 0
+          return nil
+        when 1
+          stmts[0]
+        else
+          s(:begin, *stmts)
+        end
+      elsif stmts.nil?
+        nil
+      else
+        binding.pry
+      end
+    end
+
     def on_int(v)
       s(:int, v.to_i)
     end
@@ -131,7 +150,7 @@ module RipperLexer
     end
 
     def on_program(stmts)
-      s(:begin, *stmts)
+      begin_node(stmts)
     end
 
     def on_tstring_content(str)
@@ -151,11 +170,16 @@ module RipperLexer
     end
 
     def on_string_add(strings, str)
-      strings.push(str)
+      strings.push(str || '')
     end
 
     def on_string_literal(parts)
       parts = [''] if parts == []
+
+      if parts.length == 1 && parts[0].is_a?(String)
+        return s(:str, parts[0])
+      end
+
       parts.map! { |part| part.is_a?(AST::Node) ? part : s(:str, part) }
       s(:dstr, *parts)
     end
@@ -165,7 +189,7 @@ module RipperLexer
     end
 
     def on_string_embexpr(exprs)
-      exprs.is_a?(Array) ? s(:begin, *exprs) : exprs
+      s(:begin, *exprs.compact)
     end
 
     def on_string_dvar(dvar)
@@ -316,20 +340,48 @@ module RipperLexer
       elsif !stmts
         s(:begin)
       else
-        stmts
+        s(:begin, stmts)
       end
     end
 
     def on_bodystmt(stmts, resbodies, else_body, ensure_body)
-      body = stmts.is_a?(Array) ? s(:begin, *stmts.compact) : stmts
+      body = begin_node(stmts)
+
+      if resbodies.nil? && else_body.nil? && ensure_body.nil?
+        return body
+      end
+
+      else_body = nil if resbodies.is_a?(Array) && else_body == s(:begin, nil)
+      else_body = s(:begin, else_body) if body && else_body
 
       if resbodies
+        if else_body && else_body.type == :begin && else_body.children.length == 1
+          else_body = else_body.children[0]
+        end
+
         body = s(:rescue, body, *resbodies, else_body)
       elsif else_body
-        body = s(:begin, *[*body, else_body].compact)
+        stmts = []
+
+        if body
+          if body.type == :begin
+            stmts += body.children
+          else
+            stmts << body
+          end
+        end
+
+        if else_body
+          stmts << else_body
+        end
+
+        stmts.compact!
+
+        body = s(:begin, *stmts)
       end
 
       if ensure_body
+        ensure_body = nil if ensure_body == s(:begin)
         body = s(:ensure, body, ensure_body)
       end
 
@@ -342,11 +394,17 @@ module RipperLexer
 
     def on_def(mid, args, bodystmt)
       _, mid =  *mid if mid.is_a?(AST::Node)
+      if args && args.type == :begin && args.children.length == 1
+        args = args.children[0]
+      end
       s(:def, mid, args, bodystmt)
     end
 
     def on_defs(definee, dot, mid, args, bodystmt)
       _, mid =  *mid if mid.is_a?(AST::Node)
+      if definee.type == :begin && definee.children.length == 1
+        definee = definee.children[0]
+      end
       s(:defs, definee, mid, args, bodystmt)
     end
 
@@ -449,12 +507,14 @@ module RipperLexer
     end
 
     def on_begin(inner)
-      if inner.nil?
-        s(:kwbegin)
-      elsif inner.type == :begin
-        inner.updated(:kwbegin)
-      elsif inner.type == :kwbegin
-        inner
+      return s(:kwbegin) if inner.nil?
+
+      if inner.is_a?(AST::Node) && inner.type == :begin
+        if inner.children.length > 1
+          inner.updated(:kwbegin)
+        else
+          s(:kwbegin, inner)
+        end
       else
         s(:kwbegin, inner)
       end
@@ -797,8 +857,8 @@ module RipperLexer
       s(:args, *arglist)
     end
 
-    def on_brace_block(args, body)
-      body = s(:begin, *body.compact) if body.is_a?(Array)
+    def on_brace_block(args, stmts)
+      body = begin_node(stmts)
       args ||= s(:args)
 
       args = _handle_procarg0(args)
@@ -825,7 +885,10 @@ module RipperLexer
     end
 
     def on_lambda(args, stmts)
-      body = s(:begin, *stmts.compact)
+      body = begin_node(stmts)
+      if args.is_a?(AST::Node) && args.type == :begin && args.children.length == 1
+        args = args.children[0]
+      end
       lambda_call = @builder.class.emit_lambda ? s(:lambda) : s(:send, nil, :lambda)
       s(:block, lambda_call, args, body)
     end
@@ -846,10 +909,10 @@ module RipperLexer
       s(:yield)
     end
 
-    def on_if(cond, then_branch, else_branch)
-      then_branch = s(:begin, *then_branch.compact) if then_branch.is_a?(Array)
-      else_branch = s(:begin, *else_branch.compact) if else_branch.is_a?(Array)
-      s(:if, cond, then_branch, else_branch)
+    def on_if(cond, then_smts, else_stmts)
+      then_body = begin_node(then_smts)
+      else_body = begin_node(else_stmts)
+      s(:if, cond, then_body, else_body)
     end
 
     def on_if_mod(cond, then_branch)
@@ -857,7 +920,7 @@ module RipperLexer
     end
 
     def on_else(stmts)
-      s(:begin, *stmts.compact)
+      begin_node(stmts) || s(:begin, nil)
     end
 
     def on_elsif(cond, then_branch, else_branch)
@@ -876,15 +939,15 @@ module RipperLexer
       s(:case, cond, *whens)
     end
 
-    def on_when(conds, body, next_whens)
-      body = s(:begin, *body.compact) if body.is_a?(Array)
+    def on_when(conds, stmts, next_whens)
+      body = begin_node(stmts)
       next_whens = [next_whens] unless next_whens.is_a?(Array)
       [s(:when, *conds, body), *next_whens]
     end
 
     def on_while(cond, stmts)
-      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
-      s(:while, cond, stmts)
+      body = begin_node(stmts)
+      s(:while, cond, body)
     end
 
     def on_while_mod(cond, stmt)
@@ -893,8 +956,8 @@ module RipperLexer
     end
 
     def on_until(cond, stmts)
-      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
-      s(:until, cond, stmts)
+      body = begin_node(stmts)
+      s(:until, cond, body)
     end
 
     def on_until_mod(cond, stmt)
@@ -909,9 +972,9 @@ module RipperLexer
         vars = reader_to_writer(vars)
       end
 
-      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
+      body = begin_node(stmts)
 
-      s(:for, vars, in_var, stmts)
+      s(:for, vars, in_var, body)
     end
 
     def on_break(args)
@@ -920,8 +983,8 @@ module RipperLexer
     end
 
     def on_return(args)
-      args = s(:begin, *args.compact) if args.is_a?(Array)
-      s(:return, args)
+      arg = begin_node(args)
+      s(:return, arg)
     end
 
     def on_return0
@@ -942,19 +1005,17 @@ module RipperLexer
     end
 
     def on_BEGIN(stmts)
-      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
-      s(:preexe, stmts)
+      s(:preexe, begin_node(stmts))
     end
 
     def on_END(stmts)
-      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
-      s(:postexe, stmts)
+      s(:postexe, begin_node(stmts))
     end
 
     def on_rescue(klasses, var, stmts, nested)
       klasses = s(:array, *klasses) if klasses.is_a?(Array)
       var = reader_to_writer(var) if var
-      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
+      stmts = begin_node(stmts)
 
       [s(:resbody, klasses, var, stmts), *nested]
     end
@@ -964,8 +1025,7 @@ module RipperLexer
     end
 
     def on_ensure(stmts)
-      stmts = s(:begin, *stmts.compact) if stmts.is_a?(Array)
-      stmts
+      begin_node(stmts) || s(:begin)
     end
 
     def reader_to_writer(ref)

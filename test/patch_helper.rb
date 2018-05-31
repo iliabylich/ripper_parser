@@ -100,19 +100,6 @@ module ParseHelper
   def assert_context(*)
     # there's no exposable context in the Ripper
   end
-
-  def assert_equal(expected, actual, message = 'expected to be equal')
-    if expected.is_a?(AST::Node)
-      expected = RipperLexer::AstMinimizer.instance.process(expected)
-    end
-
-    if expected.nil?
-      # s(:begin) -> nil
-      assert_nil actual, message
-    else
-      super(actual, expected, message)
-    end
-  end
 end
 
 module Parser
@@ -125,8 +112,20 @@ module ParserExt
     locals = @static_env.instance_eval { @variables.to_a }.map { |l| "#{l} = nil" }.join('; ')
     source_buffer.instance_eval { @source = "nil; begin; #{locals}; end; #{@source}" }
     ast = super
-    ast = ast ? Parser::AST::Node.new(:begin, ast.children[2..-1]) : nil
-    RipperLexer::AstMinimizer.instance.process(ast)
+
+    if ast
+      nodes = ast.children[2..-1]
+      case nodes.length
+      when 0
+        nil
+      when 1
+        nodes[0]
+      else
+        Parser::AST::Node.new(:begin, nodes)
+      end
+    else
+      nil
+    end
   end
 end
 
